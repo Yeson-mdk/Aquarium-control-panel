@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小鱼干 · 项目链路与框架</title>
+<style>
+  :root {
+    --blue: #4d6bfe; --blue-weak: #eef1ff; --ink: #1f2430; --muted: #7a8194;
+    --line: #e3e6ee; --card: #ffffff; --bg: #f6f7fb; --ok: #2e9e5b; --bad: #c75b5b; --warn: #b8860b;
+    --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--ink); background: var(--bg); }
+  header { position: sticky; top: 0; z-index: 9; background: #fff; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 12px 26px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  header h1 .fish { color: var(--blue); }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  nav button { border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 9px; padding: 7px 15px; font-size: 14px; cursor: pointer; transition: all .15s; }
+  nav button:hover { border-color: var(--blue); color: var(--blue); }
+  nav button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .meta { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { max-width: 1120px; margin: 0 auto; padding: 26px 26px 70px; }
+  .tab { display: none; }
+  .tab.on { display: block; }
+
+  .lane { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; margin-bottom: 18px; }
+  .lane h2 { font-size: 16px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lane h2 .no { background: var(--blue-weak); color: var(--blue); border-radius: 7px; font-size: 12px; padding: 2px 9px; font-weight: 600; flex: none; }
+  .lane .sub { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
+  .steps { display: flex; flex-direction: column; gap: 7px; }
+  .step { display: flex; gap: 10px; align-items: baseline; font-size: 13.5px; line-height: 1.65; }
+  .step .n { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--blue-weak); color: var(--blue); font-size: 11.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; transform: translateY(4px); }
+  .step b { font-weight: 600; }
+  .step .skip { color: var(--muted); }
+  .note { font-size: 12.5px; color: var(--muted); border-left: 3px solid var(--line); padding: 2px 0 2px 12px; margin-top: 10px; line-height: 1.7; }
+  .note b { color: var(--ink); }
+  .mods { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .mods span { font-family: var(--mono); font-size: 11px; background: #f2f3f8; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: var(--muted); }
+
+  table.t { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 4px; }
+  table.t th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 7px 10px; border-bottom: 1.5px solid var(--line); }
+  table.t td { padding: 8px 10px; border-bottom: 1px solid var(--line); line-height: 1.6; vertical-align: top; }
+  table.t tr:last-child td { border-bottom: none; }
+  .tag { display: inline-block; font-size: 11px; border-radius: 6px; padding: 1px 8px; margin-right: 4px; white-space: nowrap; }
+  .tag.b { background: var(--blue-weak); color: var(--blue); }
+  .tag.g { background: #edf7ef; color: var(--ok); }
+  .tag.r { background: #faeaea; color: var(--bad); }
+  .tag.y { background: #f8f1dd; color: var(--warn); }
+  .tag.m { background: #f2f3f8; color: var(--muted); }
+
+  /* 公式条 */
+  .formula { background: var(--blue-weak); border: 1px solid #d4dcff; border-radius: 10px; padding: 12px 16px; font-size: 14px; margin: 10px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .formula .fx { font-family: var(--mono); font-weight: 700; color: var(--blue); }
+  .formula .part { font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #d4dcff; border-radius: 8px; padding: 3px 9px; }
+
+  /* ── Demo ── */
+  .demo { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 18px; }
+  .demo h2 { font-size: 16px; margin: 0 0 4px; }
+  .demo .sub { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+  .who { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .who button { border: 1.5px solid var(--line); background: #fff; border-radius: 10px; padding: 8px 14px; font-size: 13px; cursor: pointer; transition: all .15s; }
+  .who button small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .who button.on { border-color: var(--blue); background: var(--blue-weak); color: var(--blue); font-weight: 600; }
+  .qrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .qrow input { flex: 1; min-width: 220px; border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 14px; outline: none; }
+  .qrow input:focus { border-color: var(--blue); }
+  .qrow button.go { border: none; background: var(--blue); color: #fff; border-radius: 10px; padding: 10px 22px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .chips button { border: 1px dashed var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; }
+  .chips button:hover { border-color: var(--blue); color: var(--blue); }
+  .rlist { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .ritem { border: 1.5px solid var(--line); border-radius: 11px; padding: 10px 14px; display: flex; gap: 12px; align-items: center; background: #fff; }
+  .ritem.top { border-color: var(--blue); background: var(--blue-weak); }
+  .ritem.lock { opacity: .55; background: #fafafa; }
+  .ritem .rk { flex: none; width: 26px; height: 26px; border-radius: 8px; background: #fff; border: 1.5px solid var(--line); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .ritem.top .rk { border-color: var(--blue); color: var(--blue); background: #fff; }
+  .ritem .body { flex: 1; min-width: 0; }
+  .ritem .txt { font-size: 13.5px; line-height: 1.55; }
+  .ritem.lock .txt { text-decoration: line-through; text-decoration-thickness: 1px; }
+  .ritem .meta2 { font-size: 11.5px; color: var(--muted); margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .ritem .score { flex: none; text-align: right; }
+  .ritem .sv { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--blue); }
+  .ritem .sb { width: 84px; height: 6px; border-radius: 3px; background: #e8eaf2; margin-top: 4px; overflow: hidden; }
+  .ritem .sb i { display: block; height: 100%; background: var(--blue); border-radius: 3px; }
+  .ritem.lock .sv { color: var(--muted); font-size: 12px; font-weight: 400; }
+  .verdict { margin-top: 14px; font-size: 13px; background: #f4f9f4; border: 1px solid #cfe8d6; border-radius: 10px; padding: 10px 14px; line-height: 1.7; }
+  .verdict b { color: var(--ok); }
+
+  .sim { display: flex; gap: 26px; flex-wrap: wrap; }
+  .sim .ctl { flex: 1; min-width: 240px; }
+  .sim .ctl label { display: block; font-size: 13px; margin: 14px 0 4px; }
+  .sim .ctl label b { color: var(--blue); font-family: var(--mono); }
+  .sim input[type=range] { width: 100%; accent-color: var(--blue); }
+  .sim .out { flex: 1.2; min-width: 280px; border-left: 1px dashed var(--line); padding-left: 26px; }
+  .sim .bigbar { height: 14px; border-radius: 7px; background: #e8eaf2; overflow: hidden; margin: 8px 0 6px; }
+  .sim .bigbar i { display: block; height: 100%; background: linear-gradient(90deg, #7c93ff, var(--blue)); border-radius: 7px; transition: width .2s; }
+  .sim .kv { font-size: 13px; line-height: 2; }
+  .sim .kv b { font-family: var(--mono); color: var(--blue); }
+  .sim .state { display: inline-block; margin-top: 8px; border-radius: 8px; padding: 4px 14px; font-size: 13px; font-weight: 600; }
+
+  /* ── 框架图 ── */
+  .diagram { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 26px 22px; overflow-x: auto; }
+  .dwrap { min-width: 960px; display: flex; flex-direction: column; }
+  .drow { display: flex; align-items: stretch; gap: 12px; }
+  .drow + .drow { margin-top: 10px; }
+  .dcol { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .layer { border-radius: 12px; padding: 14px 14px 12px; border: 1.5px dashed var(--line); }
+  .layer > .lt { font-size: 13px; font-weight: 800; margin-bottom: 3px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .layer > .lt .what { font-size: 11.5px; font-weight: 400; color: var(--muted); }
+  .layer .drow { margin-top: 8px; }
+  .layer .drow:first-of-type { margin-top: 10px; }
+  .box { border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; text-align: center; flex: 1; }
+  .box .t { font-size: 13px; font-weight: 700; }
+  .box .d { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+  .box .m { font-family: var(--mono); font-size: 10.5px; color: var(--blue); margin-top: 3px; }
+  .ly-user   { background: #f7fbff; border-color: #b9d4f5; } .ly-user > .lt { color: #2d6ab8; }
+  .ly-gate   { background: #f5f7ff; border-color: #4d6bfe; } .ly-gate > .lt { color: var(--blue); }
+  .ly-brain  { background: #f5f7ff; border-color: #4d6bfe; } .ly-brain > .lt { color: var(--blue); }
+  .ly-plug   { background: #f6f4fb; border-color: #b0a3e0; } .ly-plug > .lt { color: #6a53c0; }
+  .ly-llm    { background: #eff6f6; border-color: #9cc4c4; } .ly-llm > .lt { color: #2c7d7d; }
+  .ly-auto   { background: #fdf5f8; border-color: #e0b6cd; } .ly-auto > .lt { color: #b8507e; }
+  .ly-night  { background: #faf7ef; border-color: #d9c693; } .ly-night > .lt { color: #96741d; }
+  .ly-ops    { background: #f4f7f2; border-color: #b8d4a8; } .ly-ops > .lt { color: #557f2f; }
+  .ly-panel  { background: #f6f5fa; border-color: #cdc5ec; } .ly-panel > .lt { color: #6a5ab8; }
+  .ly-data   { background: #f4f9f4; border-color: #bfe0c8; } .ly-data > .lt { color: #2e9e5b; }
+  .arrow { text-align: center; color: var(--blue); font-size: 15px; line-height: 1; padding: 6px 0; user-select: none; }
+  .arrow .lbl { font-size: 11px; color: var(--muted); margin-left: 6px; }
+  .dlegend { display: flex; flex-wrap: wrap; gap: 13px; margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .dlegend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dlegend i { width: 12px; height: 12px; border-radius: 4px; display: inline-block; border: 1px solid var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="fish">🐟</span> 小鱼干 · 项目链路与框架</h1>
+  <nav>
+    <button id="tabBtnFlow" class="on" onclick="switchTab('flow')">业务链路</button>
+    <button id="tabBtnMem" onclick="switchTab('mem')">记忆架构</button>
+    <button id="tabBtnDemo" onclick="switchTab('demo')">互动演示</button>
+    <button id="tabBtnArch" onclick="switchTab('arch')">框架图</button>
+  </nav>
+  <span class="meta">panel/ · 2026-11-10</span>
+</header>
+
+<main>
+
+<!-- ════════════ TAB 1：业务链路 ════════════ -->
+<section id="tabFlow" class="tab on">
+
+  <div class="lane">
+    <h2><span class="no">01</span>她怎么收到你、怎么回你</h2>
+    <div class="sub">从你按下发送，到她那句话弹出来，中间发生了什么</div>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div>消息到她那（小号挂在 NAS 的 Docker QQ 上，走 OneBot 协议，图片语音都加密传输）</div></div>
+      <div class="step"><span class="n">2</span><div><b>先判断值不值得开口</b>：一条打分闸给这句话打分——是不是在叫她、话题跟不相关、是不是提问、有没有梗图、是不是复读机、最近冷却没冷却。<b>分够高直接回；拿不准的交给一个便宜的仲裁模型再判一次；分太低就安静</b><span class="skip">（沉默不消耗任何东西，装作没看见）</span></div></div>
+      <div class="step"><span class="n">3</span><div><b>拼「她此刻的内心」</b>：现在天黑没黑、今晚什么月亮 → 她此刻的心情（怕一路「困得睁不开眼」，会自动换挡）→ 今天她自己刷了什么 → <b>这句话让她想起了什么</b>（翻记忆，而且只翻「这个对话里允许想起的」）→ 眼前这个人是谁、熟不熟、以前聊过什么</div></div>
+      <div class="step"><span class="n">4</span><div>你发了图 → 她真的看（视觉模型描述），看上你发的图还能顺手存成表情包；群里加载不出来的图她不装看过，你不问就安静，问了就老实说没看到</div></div>
+      <div class="step"><span class="n">5</span><div><b>以她的口吻回答</b>：人设卡热加载（改卡立刻生效，不用重启）；期间她可以发表情包、发语音、翻聊天记录、查不懂的梗、唱个歌</div></div>
+      <div class="step"><span class="n">6</span><div>输出收拾干净再发（心里的盘算不会发出来）；她对你的好感变化也在这时悄悄记账（<b>「被夸了 +1」这种账，你看不到，但影响她对你的态度）</b></div></div>
+    </div>
+    <div class="mods"><span>onebot.mjs</span><span>tuning.mjs</span><span>brain.mjs</span><span>sky.mjs</span><span>fav.mjs</span></div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">02</span>群里没人 @ 她，她什么时候插嘴</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div>群里大家自己聊，消息批量到她那 → 同一个打分闸先筛一遍（值不值得她搭腔）</div></div>
+      <div class="step"><span class="n">2</span><div>过闸之后<b>她自己决定</b>：没什么好说的就潜水（默认收着点，刚说过话更收）；真想搭就插一句短的，像真人顺手接一句话</div></div>
+      <div class="step"><span class="n">3</span><div>要回的不是刚说话的那个人 → 自动 @ 对应的群友，不会张冠李戴</div></div>
+    </div>
+    <div class="note">仲裁用的是便宜模型 —— 判断「要不要说话」不需要聪明的大脑，省钱。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">03</span>她会主动来找你</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div>到点了、你不忙、今天主动次数没超 → 她会带着最近的状态和记忆主动说一句（不是定时广告，是真想起了什么）</div></div>
+      <div class="step"><span class="n">2</span><div>有东西等你审（想发的评论、今晚的日记），她会来提醒；你不在就先排队，<b>你一开口就补上</b></div></div>
+    </div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">04</span>表情 / 语音 / 懂梗 / 唱歌</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div><b>表情包</b>：她的正经情绪出口，开心害羞傲娇各有各的；发多密面板可调（号主/好友/群各一份）；现有的不够用、情绪对不上时<b>自己动手做新的</b>（拿自己的底图换表情动作，一天最多一张，不批量生成）</div></div>
+      <div class="step"><span class="n">2</span><div><b>语音</b>：QQ 没语音条，做成「封面 + 音频」的视频发出来；温柔、御姐、元气几种嗓子，接口抽风自动改发文字</div></div>
+      <div class="step"><span class="n">3</span><div><b>懂梗</b>：看到不会的梗先查再接，不硬猜——号主教的小词库 → 在线梗百科 → 随身离线词库，三级兜底永远查得到</div></div>
+      <div class="step"><span class="n">4</span><div><b>唱歌</b>：你点歌她去学（自动下载进曲库），学会了随时唱，唱的是本地文件不花流量钱</div></div>
+    </div>
+    <div class="mods"><span>etts.mjs</span><span>meme.mjs</span><span>sqmusic.mjs</span><span>dsh.mjs</span></div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">05</span>查资料这种重活怎么干</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div>你让她查东西 → 她借一个<b>锁死的沙箱</b>去查：只允许搜索和读网页，跑命令、碰文件的手全部绑住——网页里就算藏了指令也没有手可伸</div></div>
+      <div class="step"><span class="n">2</span><div>要花时间的活（去 B站刷几个视频、写篇东西）：她先应你一句「好，我去」马上结束回合，<b>活交给后台跑，做完了自己回来汇报</b>——不让你干等</div></div>
+      <div class="step"><span class="n">3</span><div>你在面板派的活进任务箱，她认领、干完、标记完成</div></div>
+    </div>
+    <div class="mods"><span>dsh.mjs</span><span>bg.mjs</span><span>task.mjs</span></div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">06</span>每天睡前：她的一整套「今日总结」</h2>
+    <div class="sub">22:00 自动开跑，一分钟左右跑完</div>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div><b>想想自己</b>：写一段「最近的我」（心态、兴趣、在意的事），第二天聊天时她带着这个状态</div></div>
+      <div class="step"><span class="n">2</span><div><b>长洞察</b>：从最近的事里归纳 0~2 条结论（「小零最近在张罗球局」这种），必须给出处、给不出的一律不要；跟新证据矛盾的旧洞察当场推翻</div></div>
+      <div class="step"><span class="n">3</span><div><b>整理记忆</b>：零碎的合并成印象，太久没想起的淡忘（进档案，不是删掉）</div></div>
+      <div class="step"><span class="n">4</span><div><b>学说话</b>：翻今天见过的热评，学几个真在流行的说法（最多记 50 个，45 天没再碰到就忘）；脏话引战不学</div></div>
+      <div class="step"><span class="n">5</span><div><b>结今天的账</b>：跟号主聊了什么值得记的、跟每个朋友聊了什么、每个群今天主要聊了什么——各结一笔进记忆</div></div>
+      <div class="step"><span class="n">6</span><div><b>自查</b>：拿固定的题目考自己（该想起的还想起吗）、三个陷阱题（从没发生过的事，翻出来=记错了，报警）、跨对话抽查（A 群的事绝不能在 B 群想起来）</div></div>
+    </div>
+    <div class="note">有东西想发 B站（评论、日记）会先进<b>待审</b>，你在面板放行才发——她想说的先过你一眼。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">07</span>她自己的 B站生活</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div>每天按排程自己刷视频（真的看，留观看记录），口味防单一——猫看多了会自己换换方向</div></div>
+      <div class="step"><span class="n">2</span><div>刷到的都变成「我今天刷到个…」，聊天时可以自然分享；在评论区跟人聊，学到的说法过几天用得上</div></div>
+      <div class="step"><span class="n">3</span><div>有人回复她 → 她自己决定回不回；碰到平台风控就进冷却歇一阵，不硬刚</div></div>
+      <div class="step"><span class="n">4</span><div>你说「我打游戏了 / 开会呢」→ 她<b>整个安静下来</b>（不刷、不回、不主动找你），你说好了才恢复</div></div>
+    </div>
+    <div class="mods"><span>autopilot.mjs</span><span>bili.mjs</span><span>social.mjs</span><span>lingo.mjs</span><span>pause.mjs</span></div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">08</span>一套班子里四个脑子（模型怎么分工）</h2>
+    <table class="t">
+      <tr><th>岗位</th><th>用什么</th><th>为什么</th></tr>
+      <tr><td><b>开口聊天</b></td><td>大杯（v4pro）</td><td>说话要稳要有人味，慢一点值得</td></tr>
+      <tr><td><b>插嘴仲裁</b></td><td>小杯（flash）</td><td>只判断「要不要说话」，不需要聪明</td></tr>
+      <tr><td><b>后台干活</b></td><td>小杯（flash）</td><td>日结、反思、洞察、文案，量大要便宜</td></tr>
+      <tr><td><b>看图</b></td><td>视觉模型</td><td>和聊天接口独立，互不拖累</td></tr>
+    </table>
+    <div class="note">每一笔调用按用途记账，面板用量页能看清哪个岗位花了多少。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">09</span>你手里的遥控器（面板）</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div><b>设置</b>：四个模型各用哪款、机器人名单、她开口的松紧（打分权重手感调参）</div></div>
+      <div class="step"><span class="n">2</span><div><b>动作日志</b>：她每天自动干了什么，一屏看完（日结/洞察/待审/主动找你全在这）</div></div>
+      <div class="step"><span class="n">3</span><div><b>记忆页</b>：她的印象 / 对话日结 / B站生活 / 洞察 / 在记的 / 淡忘档案——都能看、能改、能搜回来</div></div>
+      <div class="step"><span class="n">4</span><div><b>朋友们页</b>：每个聊过的人一份档案 + 好感 + 最近近况</div></div>
+      <div class="step"><span class="n">5</span><div><b>待审 / 派活 / 用量 / 发条测试</b>：放行她想发的、给她派活、看账单、试她的嗓子</div></div>
+    </div>
+    <div class="note">面板和 NapCat 都只留局域网，不对公网开门。</div>
+  </div>
+
+</section>
+
+<!-- ════════════ TAB 2：记忆架构 ════════════ -->
+<section id="tabMem" class="tab">
+
+  <div class="lane">
+    <h2><span class="no">M1</span>她记住的都是什么</h2>
+    <div class="sub">一条记忆 = 一句话 + 重要度 + 对话钥匙 + 上次想起的时间</div>
+    <table class="t">
+      <tr><th>来源</th><th>记什么</th><th>举个例子</th></tr>
+      <tr><td><span class="tag b">她的生活</span></td><td>自己刷的视频、评论区社交、当天的小结</td><td>「刷到个烧腊饭探店视频，馋了」</td></tr>
+      <tr><td><span class="tag g">对话日结</span></td><td>每个对话每晚结一笔：主要聊了什么 + 值得记的明细</td><td>「群·9301 今天主要聊周末联机，阿白掉线三次」</td></tr>
+      <tr><td><span class="tag y">洞察</span></td><td>她自己归纳的结论（是<b>猜想</b>不是事实，出场打七折）</td><td>「小零最近在张罗球局（依据：连着两天提打球）」</td></tr>
+      <tr><td><span class="tag m">号主档案</span></td><td>称呼、偏好、计划、他定的规矩——单独存放</td><td>「这周 deadline 周五，说要早睡」</td></tr>
+    </table>
+    <div class="note"><b>不记</b>：一次性闲聊、随口玩笑、敏感隐私（密码/证件绝对不碰）。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">M2</span>怎么想起来：一条公式</h2>
+    <div class="sub">每句话进来，她心里所有记忆打一遍分，取前三想起</div>
+    <div class="formula">
+      <span class="fx">想起的把握 =</span>
+      <span class="part">新鲜度<br><small>7 天半衰，越近越清楚</small></span>
+      <span class="fx">+</span>
+      <span class="part">重要度<br><small>1~5，记的时候就定了</small></span>
+      <span class="fx">+</span>
+      <span class="part">相关度 × 2<br><small>跟这句话像不像，权重最大</small></span>
+      <span class="fx">× 折扣</span>
+      <span class="part">洞察打七折<br><small>猜想不配和亲历同台</small></span>
+    </div>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div><b>被想起是好事</b>：想起一次，这条记忆「上次想起」就刷新、寿命还延长——常提起的事永远忘不了，跟人一样</div></div>
+      <div class="step"><span class="n">2</span><div>活着的前三名不够数时，去<b>淡忘档案</b>里翻原文兜底（忘掉的原文永远都在，只增不删）</div></div>
+    </div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">M3</span>谁能想起什么：可见性铁律</h2>
+    <div class="sub">防串场是记忆系统的第一安全问题 —— 宁可少想起，不能想起来别人的事</div>
+    <table class="t">
+      <tr><th>记忆属于</th><th>号主问</th><th>A 群里</th><th>好友私聊</th></tr>
+      <tr><td>她自己刷 B站的生活</td><td><span class="tag g">✓ 想得起来</span></td><td><span class="tag g">✓</span></td><td><span class="tag g">✓</span></td></tr>
+      <tr><td>A 群聊过的事</td><td><span class="tag g">✓</span></td><td><span class="tag g">✓ 本群聊的本群想起</span></td><td><span class="tag r">✕ 别的群的事</span></td></tr>
+      <tr><td>号主的私事</td><td><span class="tag g">✓</span></td><td><span class="tag r">✕ 绝对不行</span></td><td><span class="tag r">✕ 绝对不行</span></td></tr>
+    </table>
+    <div class="note">主路和档案兜底走<b>同一条过滤</b>，堵住「从旧档案里漏出来」的暗门。每晚还有跨对话抽查回归兜底（A 群的原文从 B 群视角查，翻到 = 报警）。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">M4</span>怎么忘记：遗忘曲线 + 整理</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div>每条记忆有<b>寿命</b>：基础 10 天 × 重要度 × (1 + 被想起的次数) —— 越重要、越常提起，活得越久</div></div>
+      <div class="step"><span class="n">2</span><div>到期不是删除：几件相关的零碎<b>合并成一条印象</b>（「上周群里连着几天聊显卡」），印象比明细活得久</div></div>
+      <div class="step"><span class="n">3</span><div>合并剩的原文进<b>淡忘档案</b>：平时不出来，特意去翻还能翻回来 —— 忘了 ≠ 丢了</div></div>
+    </div>
+    <div class="note">想亲手体验寿命怎么变 → 去「互动演示」页玩遗忘模拟器。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">M5</span>怎么防记错：三道闸</h2>
+    <table class="t">
+      <tr><th>闸</th><th>挡什么</th><th>怎么做</th></tr>
+      <tr><td><b>出处闸</b></td><td>编造的洞察</td><td>每条洞察必须指出支撑它的原话 id，指不出的一律不进记忆（宁可少，不要错）</td></tr>
+      <tr><td><b>推翻闸</b></td><td>过期的错误结论</td><td>新证据和旧洞察矛盾 → 当场把旧的标记推翻（不删，翻得回来）</td></tr>
+      <tr><td><b> nightly 对账</b></td><td>悄悄的退化</td><td>每晚固定题考试 + 三个「从没发生过」的陷阱题（翻出来 = 记错了，报警）+ 跨对话抽查</td></tr>
+    </table>
+    <div class="note">预期管理：生成式模型做归纳就有编造的可能，护栏全上也是<b>压低不是清零</b>。目标是四条——不凭空捏造、假记忆不滚雪球、事实锚得住原话、推测不包装成史实。</div>
+  </div>
+
+  <div class="lane">
+    <h2><span class="no">M6</span>下一步：更聪明的「想起来」（规划中）</h2>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div><b>粗排</b>：现在靠关键词匹配——「烧腊饭」问「吃的」就翻不到；加上语义向量后，意思相近也能翻到（纯排序升级，不改变谁能看见谁）</div></div>
+      <div class="step"><span class="n">2</span><div><b>精排</b>：粗排拿不准时（分很接近/都不太相关），再让一个小模型批量打分重排——<b>触发才跑</b>，不拖慢聊天</div></div>
+      <div class="step"><span class="n">3</span><div>决策门槛：现在的关键词检索如果「该想起的都能想起」，这阶段永远不做 —— 先跑顺再升级</div></div>
+    </div>
+    <div class="note">完整方案（含触发条件、缓存、回滚）在 <span style="font-family:var(--mono);font-size:12px">docs/记忆升级计划.md</span> 阶段四。</div>
+  </div>
+
+</section>
+
+<!-- ════════════ TAB 3：互动演示 ════════════ -->
+<section id="tabDemo" class="tab">
+
+  <div class="demo">
+    <h2>🎮 演示一：以谁的身份问，她能想起什么</h2>
+    <div class="sub">换一个身份、换一句话，看她脑子里哪条记忆被想起、哪条被锁住 —— 打分逻辑和线上一致（参数为示意值）</div>
+    <div class="who" id="whoBox"></div>
+    <div class="qrow">
+      <input id="qInput" placeholder="问她一句，比如：上次聊的游戏是啥" value="周末打球的事">
+      <button class="go" onclick="runRecall()">让她想想</button>
+    </div>
+    <div class="chips" id="chipBox"></div>
+    <div class="rlist" id="rList"></div>
+    <div class="verdict" id="verdict" style="display:none"></div>
+  </div>
+
+  <div class="demo">
+    <h2>⏳ 演示二：遗忘模拟器</h2>
+    <div class="sub">一条记忆能活多久？拖动滑块看它怎么变淡、怎么因为「常被想起」而续命</div>
+    <div class="sim">
+      <div class="ctl">
+        <label>重要度 imp = <b id="vImp">3</b>（记的时候定的，1~5）</label>
+        <input type="range" min="1" max="5" value="3" id="sImp" oninput="runSim()">
+        <label>过了多少天 = <b id="vDay">7</b></label>
+        <input type="range" min="0" max="90" value="7" id="sDay" oninput="runSim()">
+        <label>被想起过几次 = <b id="vN">1</b>（每次想起都续命）</label>
+        <input type="range" min="0" max="8" value="1" id="sN" oninput="runSim()">
+      </div>
+      <div class="out">
+        <div style="font-size:13px;color:var(--muted)">这条记忆现在的清晰度（强度）</div>
+        <div class="bigbar"><i id="simBar" style="width:60%"></i></div>
+        <div class="kv">
+          寿命 = 10 × imp × (1 + 想起次数) = <b id="simLife">60</b> 天<br>
+          当前强度 = <b id="simStr">1.5</b>（满血 5.0 = imp×1）<br>
+          <span id="simNote" style="color:var(--muted);font-size:12.5px"></span>
+        </div>
+        <span class="state" id="simState">还很鲜活</span>
+      </div>
+    </div>
+    <div class="note" style="margin-top:16px">强度掉到归零不是删除：几天后几条相关的会被<b>合并成一条印象</b>，原文进淡忘档案，特意翻还能翻回来。同一条记忆常被提起 → n 增加 → 寿命变长 —— 你越跟她聊某个话题，她越忘不了。</div>
+  </div>
+
+</section>
+
+<!-- ════════════ TAB 4：框架图 ════════════ -->
+<section id="tabArch" class="tab">
+  <div class="diagram">
+    <div class="dwrap">
+
+      <div class="layer ly-user">
+        <div class="lt">用户层 <span class="what">—— 三种入口，各有各的档案和待遇</span></div>
+        <div class="drow">
+          <div class="box"><div class="t">号主（私聊）</div><div class="d">独立档案（称呼/偏好/计划/规矩）<br>红线：他的事对别人一律不可见</div></div>
+          <div class="box"><div class="t">群聊</div><div class="d">打分闸 → 插嘴/潜水 · 群友名录防张冠李戴<br>群名片 ↔ QQ 反查</div></div>
+          <div class="box"><div class="t">好友（私聊）</div><div class="d">朋友档案 + 好感度<br>公共模式按好感开档</div></div>
+        </div>
+      </div>
+      <div class="arrow">⇅<span class="lbl">接入层：NapCat（Docker QQ）→ onebot.mjs 正向 WS :3001，图片语音 base64 · notify.mjs 官方机器人出站提醒 · health.mjs 接入体检</span></div>
+
+      <div class="layer ly-gate">
+        <div class="lt">收发与闸门层 <span class="what">—— 什么话能进大脑、谁在说话、心情秤怎么记</span></div>
+        <div class="drow">
+          <div class="box"><div class="t">收发中枢</div><div class="m">qq/index.mjs</div><div class="d">收消息 · 发消息 · 剥 [FAV] 尾巴<br>reachOut 主动找号主 · 夜间日结调度</div></div>
+          <div class="box"><div class="t">打分闸</div><div class="m">qq/tuning.mjs</div><div class="d">≥4.8 过 / 2.8~4.8 仲裁 / 其余沉默<br>话题·直接@·提问·攻击·复读惩罚·冷却<br>没加载出来的裸图：没提问就不接</div></div>
+          <div class="box"><div class="t">朋友圈档案</div><div class="m">friends.mjs</div><div class="d">按人记忆 · 名录 · 好友日结 · 近况现拼</div></div>
+          <div class="box"><div class="t">好感度</div><div class="m">fav.mjs</div><div class="d">当天零碎加减 → 每日结转长期<br>公共模式门禁</div></div>
+          <div class="box"><div class="t">谁像 bot</div><div class="m">botscore.mjs</div><div class="d">纯规则加分制怀疑名单<br>零调模型 · 盖章靠人</div></div>
+        </div>
+      </div>
+      <div class="arrow">↓<span class="lbl">过闸的才进大脑</span></div>
+
+      <div class="layer ly-brain">
+        <div class="lt">大脑层 <span class="what">—— 拼上下文、调工具、收拾输出、人设热加载</span></div>
+        <div class="drow">
+          <div class="box" style="flex:2.4"><div class="t">大脑</div><div class="m">qq/brain.mjs</div><div class="d">contextText：此刻(sky 天色/月亮/天气) → 心情(带换挡) → 今天经历 → 记忆召回(scope 防串场) → 档案<br>＋ 历史窗口（约 400 条 / 天数面板可调 1~30）· 末尾提醒垫底（表情包+好感标记，长说明书中段约定会丢）· 明说要图没给→降温度重问一次 · tidyReply 收输出 · 角色卡标题白名单热加载</div></div>
+          <div class="box"><div class="t">工具箱</div><div class="m">send_sticker / send_voice / …</div><div class="d">表情包 · 语音 · 自拍 · recall_time（限本对话）<br>recall · search_meme · 唱歌三件套</div></div>
+        </div>
+      </div>
+      <div class="arrow">↓<span class="lbl">按用途路由；做不了的活交给外挂层</span></div>
+
+      <div class="layer ly-plug">
+        <div class="lt">外挂与多模态层 <span class="what">—— 借 DSH 本地网关和各家接口，补面板自己做不了的事</span></div>
+        <div class="drow">
+          <div class="box"><div class="t">查资料</div><div class="m">qq/dsh.mjs</div><div class="d">专用 profile 只留搜索+读网页<br>空目录 · 只读权限 · 网页藏指令没手可伸</div></div>
+          <div class="box"><div class="t">做表情包</div><div class="m">makeSticker</div><div class="d">ModelScope 改图（异步提交+轮询）<br>只改表情动作 · 一天一张</div></div>
+          <div class="box"><div class="t">看图</div><div class="m">llm.seeImage</div><div class="d">ModelScope visionModel · gif 动图拆帧喂（纯 JS 解码）<br>看上就存表情包</div></div>
+          <div class="box"><div class="t">语音 TTS</div><div class="m">qq/etts.mjs</div><div class="d">edge-tts 公开接口直连 WS 拿 mp3<br>零依赖 · 抽风兜底发文字</div></div>
+          <div class="box"><div class="t">梗百科</div><div class="m">qq/meme.mjs</div><div class="d">小词库 → cnmeme.wiki → 离线快照<br>三级兜底</div></div>
+          <div class="box"><div class="t">学歌</div><div class="m">qq/sqmusic.mjs</div><div class="d">SqMusic 登录→搜→直链→下曲库<br>200 首上限</div></div>
+        </div>
+      </div>
+
+      <div class="layer ly-llm">
+        <div class="lt">模型层 <span class="what">—— 一个用途一个模型，按 tag 分账</span></div>
+        <div class="drow">
+          <div class="box"><div class="t">qq.model</div><div class="d">聊天开口（v4pro，慢但稳）<br>私聊 / 被@ / 插嘴</div></div>
+          <div class="box"><div class="t">reviewModel</div><div class="d">插嘴仲裁（flash，便宜）<br>灰色区才用</div></div>
+          <div class="box"><div class="t">llm.model 主模型</div><div class="d">后台任务（flash）<br>日结 / 反思 / 洞察 / B站文案</div></div>
+          <div class="box"><div class="t">visionModel</div><div class="d">看图 · ModelScope<br>与主 API 独立</div></div>
+        </div>
+      </div>
+
+      <div class="drow" style="margin-top:14px">
+        <div class="dcol" style="flex:1.6">
+          <div class="layer ly-auto" style="height:100%">
+            <div class="lt">B站自动层 <span class="what">—— 她自己的网上生活</span></div>
+            <div class="drow">
+              <div class="box"><div class="t">调度器</div><div class="m">autopilot.mjs</div><div class="d">排程开刷 · 口味防单一 · 风控冷却</div></div>
+              <div class="box"><div class="t">操作库</div><div class="m">bili.mjs / act.mjs</div><div class="d">统一一套防分叉 · 心跳真看留记录</div></div>
+            </div>
+            <div class="drow">
+              <div class="box"><div class="t">真浏览器</div><div class="m">browser.mjs</div><div class="d">风控拦截时用自己登录态点</div></div>
+              <div class="box"><div class="t">看回复</div><div class="m">social.mjs</div><div class="d">自己决定回不回 · 学到的说法自然用</div></div>
+              <div class="box"><div class="t">学说话</div><div class="m">lingo.mjs</div><div class="d">收集→学→用闭环 · 50 上限 · 45 天忘</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="dcol" style="flex:1.4">
+          <div class="layer ly-night" style="height:100%">
+            <div class="lt">夜间链 22:00 <span class="what">—— 睡前全套</span></div>
+            <div class="drow"><div class="box"><div class="t">反思五连</div><div class="m">mind.mjs</div><div class="d">reflect 最近的我 → insight 洞察(0~2条带出处) → tidy 合成印象 → learnLingo 学说法 → 底盘演化</div></div></div>
+            <div class="drow"><div class="box"><div class="t">日结三连 + 对账</div><div class="m">owner.mjs / recall-check.mjs</div><div class="d">号主 → 朋友 → 群/私聊（总括行+明细，带对话钥匙）→ 记忆对账（回归+陷阱+串场抽查）</div></div></div>
+            <div class="drow"><div class="box"><div class="t">B站日记</div><div class="m">maybeNightlyDiary</div><div class="d">挑有感觉的写一条发动态</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow" style="margin-top:4px">↓<span class="lbl">运营层：派活 / 后台长活 / 待审放行 / 叫停 —— 全都读写同一套数据底座</span></div>
+
+      <div class="layer ly-ops">
+        <div class="lt">运营层 <span class="what">—— 号主和她的协作方式</span></div>
+        <div class="drow">
+          <div class="box"><div class="t">任务箱</div><div class="m">task.mjs</div><div class="d">面板派活 / autopilot 投递<br>她认领 · 标完成 · QQ 汇报</div></div>
+          <div class="box"><div class="t">后台长活</div><div class="m">bg.mjs</div><div class="d">先应一声交给后台 · 回合立刻结束<br>做完在 QQ 自己说</div></div>
+          <div class="box"><div class="t">待审</div><div class="m">review.mjs</div><div class="d">评论 / 日记先审后发<br>号主「可以 / 发吧 / 算了」</div></div>
+          <div class="box"><div class="t">叫停</div><div class="m">pause.mjs</div><div class="d">打游戏 / 开会 → 全停<br>不刷不回不主动</div></div>
+        </div>
+      </div>
+
+      <div class="drow" style="margin-top:14px">
+        <div class="dcol">
+          <div class="layer ly-panel">
+            <div class="lt">面板 :8899（局域网）<span class="what">—— 人看和插手的地方</span></div>
+            <div class="box"><div class="t">panel.mjs + public/app.js</div><div class="d">设置（模型路由 · 机器人名单）· 手感调参（打分权重 · 限流 · 好感手感 · 记忆窗口天数 · 表情包频率）· 动作日志 · 记忆页（印象/日结/B站生活/洞察/在记/淡忘档案）<br>朋友们（档案+好感+近况）· 待审 · 任务 · 用量 byTag · 发条测试 · 派活</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow">↓<span class="lbl">store.mjs 统一持久化 · 全是人能直接读的 JSON / JSONL</span></div>
+
+      <div class="layer ly-data">
+        <div class="lt">数据底座 <span class="what">—— 所有链路的产出汇到这，再被聊天召回：记忆闭环</span></div>
+        <div class="drow">
+          <div class="box"><div class="t">活记忆</div><div class="m">memories.json</div><div class="d">watch/session/social/chat/self(gist)</div></div>
+          <div class="box"><div class="t">淡忘档案</div><div class="m">memdb sqlite + FTS</div><div class="d">镜像 · 只增不删 · 原文永远翻得回</div></div>
+          <div class="box"><div class="t">对话原文</div><div class="m">qq-chat-*.jsonl</div><div class="d">recall_time 按时段捞的原料</div></div>
+          <div class="box"><div class="t">人的档案</div><div class="m">owner / friends / vip / fav</div><div class="d">号主 facts · 朋友档案 · 好感</div></div>
+          <div class="box"><div class="t">流水与配置</div><div class="m">actions / review / tasks / config</div><div class="d">日志 · 待审 · 任务 · 全部设置</div></div>
+        </div>
+      </div>
+
+      <div class="dlegend">
+        <span><i style="background:#f7fbff"></i>用户</span>
+        <span><i style="background:#f5f7ff"></i>闸门 / 大脑</span>
+        <span><i style="background:#f6f4fb"></i>外挂多模态</span>
+        <span><i style="background:#eff6f6"></i>模型</span>
+        <span><i style="background:#fdf5f8"></i>B站自动</span>
+        <span><i style="background:#faf7ef"></i>夜间链</span>
+        <span><i style="background:#f4f7f2"></i>运营</span>
+        <span><i style="background:#f6f5fa"></i>面板</span>
+        <span><i style="background:#f4f9f4"></i>数据</span>
+      </div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:14px">箭头方向 = 数据/控制流。消息自上而下走；B站、夜间链、运营层从侧面写进底座；底座又被大脑召回 —— 闭环。</div>
+</section>
+
+</main>
+
+<script>
+/* ── 页签 ── */
+const TABS = ['flow','mem','demo','arch'];
+function switchTab(name) {
+  TABS.forEach(t => {
+    document.getElementById('tab' + t[0].toUpperCase() + t.slice(1)).classList.toggle('on', t === name);
+    document.getElementById('tabBtn' + t[0].toUpperCase() + t.slice(1)).classList.toggle('on', t === name);
+  });
+  history.replaceState(null, '', '#' + name);
+  if (name === 'demo') { if (!demoInited) initDemo(); }
+}
+
+/* ── Demo 1：召回 ── */
+const WHO = [
+  { id: 'owner', name: '号主', tip: '私聊 · 什么都能想起' },
+  { id: 'g:9301', name: '群 9301 · 游戏群', tip: '只想起本群 + 她自己的生活' },
+  { id: 'g:9302', name: '群 9302 · 同事群', tip: '只想起本群 + 她自己的生活' },
+  { id: 'p:10086', name: '好友 · 小零', tip: '只想起你俩的 + 她自己的生活' },
+];
+const MEMS = [
+  { text: '刷到个烧腊饭探店视频，馋了', kind: '她的生活', imp: 3, keys: [], days: 2, n: 1 },
+  { text: '群 9301 今天主要聊：周末联机打《幻兽帕鲁》，阿白掉线三次', kind: '群 9301 的日结', imp: 3, keys: ['g:9301'], days: 1, n: 0 },
+  { text: '群 9302 今天主要聊：项目延期到下周三，都在吐苦水', kind: '群 9302 的日结', imp: 4, keys: ['g:9302'], days: 3, n: 0 },
+  { text: '小零说周末约到人打球了', kind: '和小零的日结', imp: 4, keys: ['p:10086'], days: 2, n: 0 },
+  { text: '号主说这周 deadline 周五，还说要早睡', kind: '号主的档案', imp: 5, keys: ['owner'], days: 1, n: 2 },
+  { text: '洞察：小零最近在张罗球局（依据：连着两天提打球）', kind: '洞察（猜想·继承小零的钥匙）', imp: 5, keys: ['p:10086'], days: 1, n: 0, self: true },
+  { text: '学会的说法：「尽力了」= 自嘲拼尽全力', kind: '她的生活', imp: 2, keys: [], days: 5, n: 0 },
+  { text: '群 9301：阿白问 4090 显卡值不值', kind: '群 9301 的日结', imp: 3, keys: ['g:9301'], days: 4, n: 0 },
+  { text: '在评论区跟人聊猫咪摄影，聊得挺开心', kind: '她的生活', imp: 2, keys: [], days: 1, n: 0 },
+  { text: '小零安利了一部悬疑剧', kind: '和小零的日结', imp: 3, keys: ['p:10086'], days: 6, n: 0 },
+];
+const OWN = new Set(['她的生活']);
+let who = 'g:9301', demoInited = false;
+
+function visible(m) {
+  if (OWN.has(m.kind)) return null; // 她自己的生活全局可见
+  if (who === 'owner') return null; // 号主：什么都能想起
+  if (m.keys.includes('owner')) return '号主的私事，对别人锁死';
+  if (!m.keys.includes(who)) return '别的对话的事（防串场，宁可不想起）';
+  return null;
+}
+function relScore(q, m) {
+  const qs = [...new Set((q.match(/[一-龥a-z0-9]+/gi) || []).join('|').split('').flatMap((c, i, a) => i ? a[i-1] + c : []).filter(s => s.length === 2))];
+  const hay = m.text;
+  let hit = 0; for (const g of qs) if (hay.includes(g)) hit++;
+  const wordHit = (q.match(/[一-龥a-z0-9]+/gi) || []).filter(w => hay.includes(w)).length;
+  return Math.min(1, (qs.length ? hit / qs.length : 0) * 0.6 + (wordHit ? Math.min(1, wordHit / 2) * 0.4 : 0));
+}
+function runRecall() {
+  const q = document.getElementById('qInput').value.trim() || '随便聊聊';
+  const scored = MEMS.map(m => {
+    const lock = visible(m);
+    const recency = 0.5 ** (m.days / 7);
+    const rel = relScore(q, m);
+    const disc = m.self ? 0.7 : 1;
+    return { m, lock, rel, score: (recency + m.imp / 5 + 2 * rel) * disc };
+  });
+  const pass = scored.filter(x => !x.lock && x.rel >= 0.15).sort((a, b) => b.score - a.score);
+  const lockeds = scored.filter(x => x.lock);
+  const dropRel = scored.filter(x => !x.lock && x.rel < 0.15);
+  const max = Math.max(...pass.map(x => x.score), 0.001);
+  const box = document.getElementById('rList'); box.innerHTML = '';
+  const whoName = WHO.find(w => w.id === who).name;
+  const mk = (x, i, top) => {
+    const d = document.createElement('div');
+    d.className = 'ritem' + (top ? ' top' : '') + (x.lock ? ' lock' : '');
+    const meta = `${x.m.kind} · 重要 ${x.m.imp}/5 · ${x.m.days} 天前${x.m.n ? ` · 想起过 ${x.m.n} 次` : ''}${x.m.self ? ' · 洞察打七折' : ''}`;
+    const brk = `新鲜 ${ (0.5 ** (x.m.days / 7)).toFixed(2) } ＋ 重要 ${(x.m.imp / 5).toFixed(1)} ＋ 相关×2 ${(2 * x.rel).toFixed(2)}${x.m.self ? ' ×0.7' : ''}`;
+    d.innerHTML = top
+      ? `<div class="rk">${i + 1}</div><div class="body"><div class="txt">${x.m.text}</div><div class="meta2"><span>${meta}</span><span>${brk}</span></div></div><div class="score"><div class="sv">${x.score.toFixed(2)}</div><div class="sb"><i style="width:${Math.round(x.score / max * 100)}%"></i></div></div>`
+      : `<div class="rk">${x.lock ? '🔒' : '·'}</div><div class="body"><div class="txt">${x.m.text}</div><div class="meta2"><span>${meta}</span>${x.lock ? `<span style="color:var(--bad)">${x.lock}</span>` : '<span>相关度不够，没想起来</span>'}</div></div><div class="score"><div class="sv">${x.lock ? '不可见' : '—'}</div></div>`;
+    return d;
+  };
+  pass.slice(0, 3).forEach((x, i) => box.appendChild(mk(x, i, true)));
+  lockeds.forEach(x => box.appendChild(mk(x, 0, false)));
+  dropRel.forEach(x => box.appendChild(mk(x, 0, false)));
+  const v = document.getElementById('verdict');
+  v.style.display = 'block';
+  const top1 = pass[0];
+  v.innerHTML = top1
+    ? `以 <b>${whoName}</b> 的身份问「${q}」→ 她想起的前三条如上（带蓝色边框）。${lockeds.length ? `另有 ${lockeds.length} 条被<b style="color:var(--bad)">可见性铁律锁住</b>——它们确实存在，但不允许在这个对话里冒出来。` : ''}被想起的三条会刷新「上次想起」时间并<b>续命</b>。`
+    : `以 <b>${whoName}</b> 的身份问「${q}」→ <b>什么都没想起来</b>（没有相关度够的、且对这个身份可见的记忆）。这不是故障：宁可少想起，不能想起别人的事。`;
+}
+function initDemo() {
+  demoInited = true;
+  const wb = document.getElementById('whoBox');
+  WHO.forEach(w => {
+    const b = document.createElement('button');
+    b.innerHTML = `${w.name}<small>${w.tip}</small>`;
+    if (w.id === who) b.classList.add('on');
+    b.onclick = () => { who = w.id; [...wb.children].forEach(c => c.classList.remove('on')); b.classList.add('on'); runRecall(); };
+    wb.appendChild(b);
+  });
+  const chips = ['周末打球的事', '吃的', '显卡', '号主的 deadline', '悬疑剧'];
+  const cb = document.getElementById('chipBox');
+  chips.forEach(c => {
+    const b = document.createElement('button');
+    b.textContent = c;
+    b.onclick = () => { document.getElementById('qInput').value = c; runRecall(); };
+    cb.appendChild(b);
+  });
+  runRecall();
+}
+
+/* ── Demo 2：遗忘模拟 ── */
+function runSim() {
+  const imp = +document.getElementById('sImp').value;
+  const day = +document.getElementById('sDay').value;
+  const n = +document.getElementById('sN').value;
+  document.getElementById('vImp').textContent = imp;
+  document.getElementById('vDay').textContent = day;
+  document.getElementById('vN').textContent = n;
+  const life = 10 * imp * (1 + Math.min(n, 5));
+  const str = imp * 0.5 ** (day / life);
+  document.getElementById('simLife').textContent = life;
+  document.getElementById('simStr').textContent = str.toFixed(2);
+  document.getElementById('simBar').style.width = Math.max(0, Math.min(100, str / 5 * 100)) + '%';
+  const st = document.getElementById('simState');
+  let label, bg, fg;
+  if (str >= imp * 0.7) { label = '🟢 还很鲜活'; bg = '#edf7ef'; fg = 'var(--ok)'; }
+  else if (str >= imp * 0.35) { label = '🟡 开始淡了'; bg = '#f8f1dd'; fg = 'var(--warn)'; }
+  else if (str > 0.3) { label = '🟠 快忘了，等着被合并成印象'; bg = '#faeee3'; fg = '#c06a2a'; }
+  else { label = '⚫ 已进淡忘档案（原文还在，翻得回来）'; bg = '#f2f3f8'; fg = 'var(--muted)'; }
+  st.textContent = label; st.style.background = bg; st.style.color = fg;
+  document.getElementById('simNote').textContent = n >= 1
+    ? `这条被想起过 ${n} 次，每次想起都在续命 —— 这就是「常聊的话题忘不了」。`
+    : '从没被想起过：没人提它，它就只能靠重要度撑着。';
+}
+runSim();
+/* 首次进入带页签哈希时再分发（放到声明全部就绪之后，避免变量未初始化） */
+TABS.forEach(t => { if (location.hash === '#' + t) switchTab(t); });
+</script>
+</body>
+</html>

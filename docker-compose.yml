@@ -1,0 +1,69 @@
+# 养鱼面板 + 小号 NapCat：在极空间/NAS 上一条命令跑起来。
+#
+#   1. 把整个项目目录拷到 NAS 的存储空间（含 bilibili-mcp/node_modules，
+#      电脑上没有就先在 bilibili-mcp/ 里 npm install 一次再拷）
+#      ⚠️ compose 文件要和 panel/ 同一层（直接包含 panel 的那层）。
+#      实在套了一层（yangyu-bot-main/panel/...）也能跑——容器会自动找；
+#      但日志里出现「找不到 panel.mjs」就是真没挂上代码，按日志里列的目录自查
+#   2. 本目录的 .env 已放好 WEBUI_TOKEN（NapCat 管理页密钥），想换自己改
+#   3. docker compose up -d
+#      （极空间 Docker 界面里用「项目/Compose」功能指到这个文件也一样，
+#       注意「项目路径」要选 compose 文件所在的那层目录）
+#   4. 浏览器开 http://NAS的IP:6099/webui → 用 .env 里那串密钥登 → 手机QQ扫码登小号
+#   5. 浏览器开 http://NAS的IP:8899 → 自动养号 →「💬 QQ 连接」：
+#      NapCat 地址填 ws://napcat:3001（走同一套 Docker 网络，用服务名），
+#      其余照面板说明填，保存后点「用小号发一条测试」
+#
+# 注意：
+#   - 8899 面板没有登录保护：只留局域网，别做端口转发/公网直连
+#   - 6099 是 NapCat 管理页（有密钥），同样别暴露公网
+#   - 3001 故意没映射到 NAS：面板走内部网络连它，外面摸不到
+#   - B站 扫码登录要有浏览器，NAS 容器里做不了：在电脑上登好后
+#     把 bilibili-mcp/login/cookie.json 拷过来即可（panel/data 一起拷更省事）
+#   - 小号登录态在 panel/qq/napcat/data/qq，换机器时整目录带走就不用重扫码
+#   - 电脑上原来那套（panel/qq/napcat 里单独的 compose）和这个互不影响，
+#     但同一台机器上别两个都开（端口会撞）
+
+name: yangyu
+
+services:
+  panel:
+    image: node:24-alpine        # 24 自带 node:sqlite（记忆档案库用），免实验标志
+    container_name: yangyu-panel
+    restart: unless-stopped
+    working_dir: /app
+    # 自动找代码：/app/panel 也好、再套一层 xxx/panel 也好，找到就进去起；
+    # 找不到就把 /app 里实际挂进来的东西列到日志里，照着改挂载路径就行
+    command: >-
+      sh -c "for D in /app/panel /app/*/panel; do if [ -f \"$$D/panel.mjs\" ]; then echo 面板代码在 $$D，启动…; cd \"$$D\"; exec node panel.mjs; fi; done; echo '× 找不到 panel.mjs —— 挂进容器的目录里没有代码，看看 /app 里到底有什么：'; ls -la /app; sleep 300; exit 1"
+    environment:
+      TZ: Asia/Shanghai      # 她的作息（几点算白天、每晚22点整理聊天）全看时区，必须设
+      PANEL_HOST: 0.0.0.0    # 容器里必须绑 0.0.0.0，否则端口映射进不来
+      PANEL_PORT: "8899"
+    ports:
+      - "8899:8899"
+    volumes:
+      - ./:/app              # 整个仓库挂进去：panel/data（记忆/聊天/好感）、stickers、tts、bilibili-mcp 都在里面
+    networks: [yangyu]
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: yangyu-napcat
+    restart: unless-stopped
+    shm_size: "1gb"          # QQ 是 Electron，Docker 默认 64MB 共享内存会把它压崩（Network service crashed / 反复强杀残留进程就是这症状）
+    init: true               # 回收僵尸进程，免得上一轮的 QQ 残留把下一轮卡死
+    environment:
+      TZ: Asia/Shanghai
+      MODE: ws               # 正向 WebSocket（3001），面板连这个
+      WEBUI_TOKEN: ${WEBUI_TOKEN}
+    ports:
+      - "6099:6099"          # WebUI 扫码用，仅局域网
+    volumes:
+      - ./panel/qq/napcat/data/qq:/app/.config/QQ        # 小号登录态，删了要重扫码
+      - ./panel/qq/napcat/data/config:/app/napcat/config
+      - ./panel/qq/napcat/data/plugins:/app/napcat/plugins
+    networks: [yangyu]
+
+networks:
+  yangyu:
+    name: yangyu
