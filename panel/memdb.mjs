@@ -38,9 +38,11 @@ export function init() {
   try {
     db = new DatabaseSync(FILE);
     db.exec('PRAGMA journal_mode = WAL;');
-    db.exec('CREATE TABLE IF NOT EXISTS mem (id TEXT PRIMARY KEY, ts TEXT, kind TEXT, imp INTEGER, text TEXT, keys TEXT, seen TEXT, n INTEGER, dead INTEGER)');
+    db.exec('CREATE TABLE IF NOT EXISTS mem (id TEXT PRIMARY KEY, ts TEXT, kind TEXT, imp INTEGER, text TEXT, keys TEXT, seen TEXT, n INTEGER, dead INTEGER, vec TEXT)');
     // 2.3 老库迁移：建表语句改了列，IF NOT EXISTS 不会给已有的表补列，得 ALTER（列已存在就跳过）
     try { db.exec('ALTER TABLE mem ADD COLUMN dead INTEGER'); } catch { /* 列已经在了 */ }
+    // 4.2 阶段四：向量列（JSON 数组存 TEXT）。老库同样要 ALTER 补列
+    try { db.exec('ALTER TABLE mem ADD COLUMN vec TEXT'); } catch { /* 列已经在了 */ }
     db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS mem_fts USING fts5(text, tokenize='trigram')");
     db.exec('CREATE TABLE IF NOT EXISTS fact (id TEXT PRIMARY KEY, kind TEXT, text TEXT, at TEXT)'); // 被自动挤掉的号主 facts 留底
     ready = true; // 先标起来：下面 syncAll(seed) 会回调 init()，ready 还是 false 的话会被自己挡回去、首次搬家搬不进来
@@ -59,14 +61,17 @@ export function init() {
 }
 
 // rowOf / ins / entryOf / 建表 四处列数必须一致——加列漏一处就是静默不存（2.3 和 4.2 的同一个坑）
-const rowOf = (e) => [String(e.id), String(e.ts || ''), String(e.kind || ''), Number(e.imp) || 3, String(e.text || ''), JSON.stringify(e.keys || []), e.seen || null, Number(e.n) || 0, e.dead ? 1 : 0];
+// vec 例外：rowOf 带上它只为 INSERT 新行时落库；DO UPDATE SET 里刻意不放 vec——
+// syncAll 是全量覆盖，UPDATE 子句若带 vec 会把已补好的向量全刷回 null（4.2 写入侧坑）
+const rowOf = (e) => [String(e.id), String(e.ts || ''), String(e.kind || ''), Number(e.imp) || 3, String(e.text || ''), JSON.stringify(e.keys || []), e.seen || null, Number(e.n) || 0, e.dead ? 1 : 0, e.vec ? JSON.stringify(e.vec) : null];
 
 /** 增量同步（save 的唯一漏斗都走这）：只增改不删，被 json 遗忘/挤掉的条目留档 */
 export function syncAll(all) {
   if (!init() || !Array.isArray(all)) return false;
   try {
     db.exec('BEGIN');
-    const ins = db.prepare('INSERT INTO mem (id, ts, kind, imp, text, keys, seen, n, dead) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, kind = excluded.kind, imp = excluded.imp, text = excluded.text, keys = excluded.keys, seen = excluded.seen, n = excluded.n, dead = excluded.dead');
+    // ⚠️ DO UPDATE SET 里绝不能加 vec = excluded.vec：syncAll 每次全量刷，会把 setVec 补好的向量冲掉
+    const ins = db.prepare('INSERT INTO mem (id, ts, kind, imp, text, keys, seen, n, dead, vec) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, kind = excluded.kind, imp = excluded.imp, text = excluded.text, keys = excluded.keys, seen = excluded.seen, n = excluded.n, dead = excluded.dead');
     const selRid = db.prepare('SELECT rowid AS rid FROM mem WHERE id = ?');
     const delFts = db.prepare('DELETE FROM mem_fts WHERE rowid = ?');
     const insFts = db.prepare('INSERT INTO mem_fts (rowid, text) VALUES (?, ?)');
@@ -119,7 +124,44 @@ export function purge(id) {
   }
 }
 
-const entryOf = (r) => ({ id: r.id, ts: r.ts, kind: r.kind, imp: r.imp, text: r.text, keys: JSON.parse(r.keys || '[]'), seen: r.seen || null, n: r.n || 0, dead: !!r.dead });
+const vecOf = (v) => { try { const a = JSON.parse(v); return Array.isArray(a) && a.length ? a : null; } catch { return null; } };
+const entryOf = (r) => ({ id: r.id, ts: r.ts, kind: r.kind, imp: r.imp, text: r.text, keys: JSON.parse(r.keys || '[]'), seen: r.seen || null, n: r.n || 0, dead: !!r.dead, vec: vecOf(r.vec) });
+
+/** 余弦相似度：返回 -1~1，任一向量为空/维度不符返回 0（当不相关，不炸） */
+export function cosine(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = Number(a[i]) || 0, y = Number(b[i]) || 0;
+    dot += x * y; na += x * x; nb += y * y;
+  }
+  return na && nb ? dot / Math.sqrt(na * nb) : 0;
+}
+
+/** 4.2 单条补向量：独立写，绝不经过 syncAll（否则被全量覆盖刷掉）。返回是否成功 */
+export function setVec(id, vec) {
+  if (!init() || !id || !Array.isArray(vec) || !vec.length) return false;
+  try {
+    db.prepare('UPDATE mem SET vec = ? WHERE id = ?').run(JSON.stringify(vec.map(Number)), String(id));
+    return true;
+  } catch (e) { lastError = e.message; return false; }
+}
+
+/** 回填用：扫出 vec 为空的行 id（分页游标是 id，断点续传靠它） */
+export function missingVecIds(afterId = '', limit = 500) {
+  if (!init()) return [];
+  try {
+    return db.prepare('SELECT id FROM mem WHERE vec IS NULL AND id > ? ORDER BY id LIMIT ?').all(String(afterId), Number(limit) || 500).map((r) => r.id);
+  } catch (e) { lastError = e.message; return []; }
+}
+
+export function vecStats() {
+  if (!init()) return { total: 0, withVec: 0 };
+  try {
+    const r = db.prepare('SELECT COUNT(*) AS total, COUNT(vec) AS withVec FROM mem').get();
+    return { total: r?.total || 0, withVec: r?.withVec || 0 };
+  } catch { return { total: 0, withVec: 0 }; }
+}
 
 // ─── 2.8 对话级可见性：memory.recall 主路和这边的档案兜底共用同一道闸 ──────────
 // 她自己的事（watch/social/session）全局可见——谁都能想起她刷过的 B站 生活，不含别人的私聊/群聊；
@@ -141,27 +183,52 @@ export function scopeVisible(e, scope) {
  * LIKE 兜住两个字的重叠；exclude 传当前还「记得」的 id，翻出来的就不重复。
  * 返回原始条目（形状和 memories.json 里的一样），怎么打分排序由调用方定。
  */
-export function search(query, { k = 50, exclude = new Set(), facts = false, kinds, scope } = {}) {
+export function search(query, { k = 50, exclude = new Set(), facts = false, kinds, scope, queryVec } = {}) {
   if (!init()) return [];
   const q = String(query || '').trim();
-  if (!q) return [];
+  if (!q && !queryVec) return [];
   const rids = new Set();
-  try {
-    const hit = db.prepare('SELECT rowid AS rid FROM mem_fts WHERE mem_fts MATCH ? LIMIT 300').all('"' + q.replace(/"/g, '""') + '"');
-    for (const r of hit) rids.add(r.rid);
-  } catch { /* 查询串不合法就只走 LIKE */ }
-  try {
-    const like = db.prepare("SELECT rowid AS rid FROM mem WHERE text LIKE ? ESCAPE '\\' LIMIT 300").all('%' + q.replace(/[\\%_]/g, '\\$&') + '%');
-    for (const r of like) rids.add(r.rid);
-  } catch (e) { lastError = e.message; }
+  const semByRid = new Map(); // rid → 余弦分，只有向量召回命中的才有；给 recall 混分用
+  // 关键词两路：q 为空（纯向量召回）时跳过，别用 LIKE '%%' 把全表都当关键词命中
+  if (q) {
+    try {
+      const hit = db.prepare('SELECT rowid AS rid FROM mem_fts WHERE mem_fts MATCH ? LIMIT 300').all('"' + q.replace(/"/g, '""') + '"');
+      for (const r of hit) rids.add(r.rid);
+    } catch { /* 查询串不合法就只走 LIKE */ }
+    try {
+      const like = db.prepare("SELECT rowid AS rid FROM mem WHERE text LIKE ? ESCAPE '\\' LIMIT 300").all('%' + q.replace(/[\\%_]/g, '\\$&') + '%');
+      for (const r of like) rids.add(r.rid);
+    } catch (e) { lastError = e.message; }
+  }
+  // 4A 向量召回：扫全表有 vec 的行算余弦（1500 条量级，本地点积很快），够相似的进候选。
+  // 这一步是「换说法翻得到」的关键——关键词命中不了「吃的→烧腊饭」，余弦能。
+  if (queryVec) {
+    try {
+      const scored = [];
+      for (const r of db.prepare('SELECT rowid AS rid, vec FROM mem WHERE vec IS NOT NULL').all()) {
+        const v = vecOf(r.vec);
+        if (!v) continue;
+        const c = cosine(queryVec, v);
+        if (c > 0.2) scored.push([r.rid, c]);
+      }
+      scored.sort((a, b) => b[1] - a[1]);
+      for (const [rid, c] of scored.slice(0, 100)) { rids.add(rid); semByRid.set(rid, c); }
+    } catch (e) { lastError = e.message; }
+  }
   const byRid = db.prepare('SELECT * FROM mem WHERE rowid = ?');
   const out = [];
   for (const rid of rids) {
     const r = byRid.get(rid);
     // kinds / scope 是防串场的最后一道（recall 翻不够数来这兜底时带着限定）：不传就全放行（面板搜索用默认）
+    // ⚠️ 向量召回的候选和关键词候选共用这道闸：语义再像，B 群/号主的事也不许从这个 scope 漏出去
     if (r && !exclude.has(r.id) && r.text && (!kinds || kinds.includes(r.kind))
       && !r.dead // 2.3：被推翻的洞察（retire）不放出来——不同步到这的话，兜底检索会把错洞察翻回来
-      && scopeVisible({ kind: r.kind, keys: JSON.parse(r.keys || '[]') }, scope)) out.push(entryOf(r));
+      && scopeVisible({ kind: r.kind, keys: JSON.parse(r.keys || '[]') }, scope)) {
+      const e = entryOf(r);
+      const sem = semByRid.get(rid);
+      if (sem !== undefined) e._sem = sem; // 挂上余弦分，recall 按 kwW/vecW 混合
+      out.push(e);
+    }
     if (out.length >= k) break;
   }
   if (facts) {
@@ -176,5 +243,6 @@ export function search(query, { k = 50, exclude = new Set(), facts = false, kind
 
 export function stats() {
   const rows = ready && db ? ((db.prepare('SELECT COUNT(*) AS c FROM mem').get()) || {}).c : 0;
-  return { ready, rows, file: FILE, lastError };
+  const withVec = ready && db ? ((db.prepare('SELECT COUNT(vec) AS c FROM mem').get()) || {}).c : 0;
+  return { ready, rows, withVec, file: FILE, lastError };
 }

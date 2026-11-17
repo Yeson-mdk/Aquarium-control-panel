@@ -213,6 +213,12 @@ export const DEFAULT_CONFIG = {
   llm: {
     baseUrl: 'https://api.deepseek.com',
     model: 'deepseek-chat',
+    // 阶段四 4A 语义检索：向量模型（OpenAI 兼容 /embeddings）。
+    // embeddingModel 留空 = 不用向量、检索退回纯关键词（默认）；填了才会打向量、恢复语义召回。
+    // embeddingBaseUrl 留空 = 走默认 ModelScope 推理接口；填了 = 走第三方（硅基流动 / 百炼 / 自建等任意 OpenAI 兼容 embedding 服务）。
+    // 向量密钥走 secrets.embeddingApiKey，留空时回退到 secrets.modelscopeToken（老配置不用改）。
+    embeddingModel: '',
+    embeddingBaseUrl: '',
     // 每天后台自己动脑子（内心、社交、自动评论）的上限，0 = 不限；你点的、你派的活不算在里面
     dailyCalls: 300,
     dailyTokens: 600000,

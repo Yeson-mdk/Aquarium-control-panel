@@ -93,6 +93,18 @@ function entry({ ts = nowIso(), kind, text, keys = [], imp = 3, src }) {
   return e;
 }
 
+/**
+ * 4.3 旁路打向量：落库后 fire-and-forget，回来单条 setVec（不经过 syncAll，避免被全量覆盖冲掉）。
+ * 没配向量模型 / 接口挂了 / 断网 → 静默不动，vec 留 null，检索走纯关键词（上线分界线）。
+ * 只碰 SQLite 档案库的 vec 列，不写 json——权威还是 memories.json，向量只是检索加速。
+ */
+function embedAside(id, text) {
+  if (!llm.embedReady()) return;
+  Promise.resolve(llm.embed([text])).then((vecs) => {
+    if (vecs?.[0]) memdb.setVec(id, vecs[0]);
+  }).catch(() => { /* 向量是锦上添花，失败不惊动记忆主路径 */ });
+}
+
 /** 记一条。keys 用「up:UP主名」「uid:123」「bv:BV...」这种前缀，方便精确命中 */
 export function add(x) {
   if (!x?.text || looksInjected(x.text)) return null;
@@ -100,6 +112,7 @@ export function add(x) {
   const all = load();
   all.push(e);
   save(all);
+  embedAside(e.id, e.text); // 落库后再打向量，add 的同步签名和返回值都不变
   return e;
 }
 
@@ -122,13 +135,26 @@ function overlap(a, b) {
   return n / Math.sqrt(a.size * b.size);
 }
 
+/** 一条候选的 S 得分（recency + imp + relevance，self 洞察再打折）——主路和向量补路共用，口径一致 */
+function scoreOf(e, rel, now, t) {
+  const age = (now - Date.parse(e.seen || e.ts)) / 86400_000;
+  const recency = 0.5 ** (Math.max(0, age) / HALF_LIFE_DAYS);
+  // 2.4 洞察（self）是猜想不是观测：整体打分乘折扣（tuning.memory.selfDiscount 可调），
+  // 不然一条高 imp 的假洞察会以同等权重污染聊天、反思、以后的所有行为
+  const disc = e.kind === 'self' ? t.memory.selfDiscount : 1;
+  return (W.recency * recency + W.importance * (e.imp / 5) + W.relevance * rel) * disc;
+}
+
 /**
  * 想起最相关的几条。query 是眼下在想的事（标题、对方说的话……），keys 是能精确命中的线索。
  * 想起的会刷新「上次想起」时间（touch=false 只看不碰，给面板用）。
  * scope（2.8 对话级召回）传当前对话的钥匙（如 ['g:群号']）：她自己的事全局可见，
  * 带对话钥匙的 chat/gist 只在钥匙全落在本对话里才可见——见 memdb.scopeVisible。
+ *
+ * queryVec（阶段四 4A）：聊天热路径预取好的 query 向量。传了才启用语义混合——
+ * 不传时下面的打分/过滤/兜底与 4A 之前逐字一致（CLI、测试、recall-check、mind 全是同步调用，零改动）。
  */
-export function recall(query, { keys = [], k = 3, kinds, scope, exclude = [], touch = true, now = Date.now() } = {}) {
+export function recall(query, { keys = [], k = 3, kinds, scope, exclude = [], touch = true, now = Date.now(), queryVec } = {}) {
   const q = grams(query);
   // 短查询（「猫」「土星 UP主」）切不出几个二字片段，按词直接找
   const words = String(query || '').split(/[\s,，、。！？!?;；]+/).filter((w) => w && w.length <= 6);
@@ -136,6 +162,23 @@ export function recall(query, { keys = [], k = 3, kinds, scope, exclude = [], to
   const skip = new Set(exclude);
   const scopeSet = scope?.length ? new Set(scope.map(String)) : null;
   const all = load();
+  const t = tuning();
+  const semMode = Array.isArray(queryVec) && queryVec.length > 0;
+  const kwW = Number.isFinite(t.memory.kwW) ? t.memory.kwW : 0.4;
+  const vecW = Number.isFinite(t.memory.vecW) ? t.memory.vecW : 0.6;
+
+  // 语义路（只在有 queryVec 时跑）：从档案库拿全量语义候选，建 id→余弦；
+  // 被遗忘的旧事（不在 json 活记忆里）单独留着，稍后和主路一起排序。
+  // memdb.search 内部已过 kinds/scope/dead 闸，这里再按 skip 排一次。
+  let semMap = new Map();
+  let vecArchived = [];
+  if (semMode) {
+    for (const v of memdb.search('', { k: 60, exclude: skip, kinds, scope: scopeSet, queryVec })) {
+      if (typeof v._sem === 'number') semMap.set(v.id, v._sem);
+      if (!all.some((e) => e.id === v.id)) vecArchived.push(v);
+    }
+  }
+
   const scored = [];
   for (const e of all) {
     if (kinds && !kinds.includes(e.kind)) continue;
@@ -145,24 +188,35 @@ export function recall(query, { keys = [], k = 3, kinds, scope, exclude = [], to
     const hit = e.keys.some((x) => want.has(x));
     const hay = `${e.text} ${e.keys.join(' ')}`;
     const wordHit = words.length ? (0.6 * words.filter((w) => hay.includes(w)).length) / words.length : 0;
-    const rel = Math.min(1, Math.max(overlap(q, grams(hay)), wordHit) + (hit ? 0.5 : 0));
-    if (!hit && rel < MIN_REL) continue;
-    const age = (now - Date.parse(e.seen || e.ts)) / 86400_000;
-    const recency = 0.5 ** (Math.max(0, age) / HALF_LIFE_DAYS);
-    // 2.4 洞察（self）是猜想不是观测：整体打分乘折扣（tuning.memory.selfDiscount 可调），
-    // 不然一条高 imp 的假洞察会以同等权重污染聊天、反思、以后的所有行为
-    const disc = e.kind === 'self' ? tuning().memory.selfDiscount : 1;
-    scored.push({ e, score: (W.recency * recency + W.importance * (e.imp / 5) + W.relevance * rel) * disc });
+    const kwRel = Math.min(1, Math.max(overlap(q, grams(hay)), wordHit) + (hit ? 0.5 : 0));
+    const sem = semMode ? (semMap.get(e.id) || 0) : 0;
+    // 无 queryVec：rel 就是关键词分（原样）。有 queryVec：按 kwW/vecW 混合。
+    const rel = semMode ? (kwW * kwRel + vecW * sem) : kwRel;
+    // MIN_REL 过滤：keys 精确命中照旧无条件放行；语义路里余弦够高（≥0.35）的也算「换说法命中」
+    if (!hit && (semMode ? (rel < MIN_REL && sem < 0.35) : kwRel < MIN_REL)) continue;
+    scored.push({ e, score: scoreOf(e, rel, now, t) });
   }
-  const top = scored.sort((a, b) => b.score - a.score).slice(0, k).map((x) => x.e);
+  // 被遗忘的旧事：只有语义路够相似（≥0.35）才让它进候选，避免向量把一堆八竿子打不着的档案翻出来
+  if (semMode) {
+    for (const v of vecArchived) {
+      if ((v._sem || 0) < 0.35) continue;
+      scored.push({ e: v, score: scoreOf(v, vecW * v._sem, now, t), archived: true });
+    }
+  }
+  const ranked = scored.sort((a, b) => b.score - a.score).slice(0, k);
+  const top = ranked.map((x) => x.e);
   if (touch && top.length) {
-    const t = nowIso();
-    for (const e of top) { e.seen = t; e.n = (e.n || 0) + 1; }
+    const nowIsoStr = nowIso();
+    for (const x of ranked) {
+      if (x.archived) continue; // 旧事不在活记忆里，touch 不到，别白改
+      const e = x.e; e.seen = nowIsoStr; e.n = (e.n || 0) + 1;
+    }
     save(all);
   }
-      // 想的不够数：去档案库翻翻被遗忘的旧事（合并/遗忘前的原文都留在那），最多补到 3 条。
+  // 想的不够数：去档案库翻翻被遗忘的旧事（合并/遗忘前的原文都留在那），最多补到 3 条。
   // kinds / scope 必须原样传下去：上面「非号主只看自己事 + 本对话」的防串场要是漏到兜底这步，
-  // 归档里的号主聊天日结、别的群的日结照样会冒给陌生人（2.8：档案兜底和主路同一道闸）
+  // 归档里的号主聊天日结、别的群的日结照样会冒给陌生人（2.8：档案兜底和主路同一道闸）。
+  // 这里不传 queryVec——语义候选已在上面统一排过序，兜底这条只管纯关键词翻旧事，职责单一。
   if (top.length < Math.min(k, 3)) {
     const known = new Set(all.map((e) => e.id));
     for (const old of memdb.search(query, { k: Math.min(k, 3) - top.length, exclude: known, kinds, scope: scopeSet })) top.push({ ...old, archived: true });
@@ -236,6 +290,7 @@ export function update(id, { text, imp } = {}) {
   e.seen = nowIso();
   e.edited = true;
   save(all);
+  if (text !== undefined) embedAside(e.id, e.text); // 正文改了，旧向量作废，重打一次覆盖
   return e;
 }
 

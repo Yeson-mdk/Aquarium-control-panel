@@ -92,6 +92,8 @@ function autopilotView() {
     llmReady: llm.llmReady(),
     llmUsage: llm.usageView(),
     hasKey: !!readSecrets().llmApiKey,
+    hasEmbedKey: !!(readSecrets().embeddingApiKey || readSecrets().modelscopeToken),
+    embeddingUrl: llm.embedUrl(),
     hasAmapKey: !!readSecrets().amapKey,
     coinLock: bili.coinLock(),
     social: social.socialView(),
@@ -289,8 +291,9 @@ const routes = {
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),
   'POST /api/autopilot/config': async (_q, b) => {
-    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, modelscopeToken, amapKey, ...patch } = b;
+    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, modelscopeToken, embeddingApiKey, amapKey, ...patch } = b;
     if (typeof modelscopeToken === 'string' && modelscopeToken.trim()) writeSecrets({ modelscopeToken: modelscopeToken.trim() });
+    if (typeof embeddingApiKey === 'string' && embeddingApiKey.trim()) writeSecrets({ embeddingApiKey: embeddingApiKey.trim() }); // 向量专用密钥，只存本机，留空不改
     if (typeof amapKey === 'string' && amapKey.trim()) writeSecrets({ amapKey: amapKey.trim() }); // 高德 Key（天气 + 经纬度），只存本机 secrets.json，留空不改
     if (typeof llmApiKey === 'string') writeSecrets({ llmApiKey: llmApiKey.trim() });
     if (typeof onebotToken === 'string' && onebotToken.trim()) writeSecrets({ onebotToken: onebotToken.trim() });
@@ -341,6 +344,16 @@ const routes = {
     return autopilotView();
   },
   'POST /api/autopilot/llm-test': async () => ({ ok: true, reply: await llm.ping() }),
+  // 阶段四：测向量模型连通性——真打一条短句，拿回维度/耗时；没配或接口挂了返回 ok:false + 人话原因。
+  // 只做一次 embedding，不碰 syncAll、不改任何记忆，纯粹是「这把钥匙能不能开门」的探针。
+  'POST /api/autopilot/embed-test': async () => {
+    if (!llm.embedReady()) return { ok: false, error: '还没配好：在「向量模型」填 embedding 模型 ID，并在下面填向量接口密钥（或「QQ 连接」里的 ModelScope 令牌）' };
+    const t0 = Date.now();
+    const vecs = await llm.embed(['蓝色的大肥鱼今天吃了烧腊饭']);
+    const ms = Date.now() - t0;
+    if (!vecs?.[0]?.length) return { ok: false, error: llm.embedError() || '接口没回有效向量——检查模型 ID、密钥和接口地址' };
+    return { ok: true, dim: vecs[0].length, ms };
+  },
   // 测插嘴仲裁这道闸：验证 reviewModel 本身能通（不通会抛错，面板直接显示原因），
   // 再拿一句恒定 3.6 分（review 档）的样例走一遍真评分 + 真仲裁，看它说接还是不接
   'POST /api/qq/review-test': async () => {

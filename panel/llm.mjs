@@ -260,6 +260,82 @@ export function makeTestPng() {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
+// ─── 阶段四 4A：文本向量（OpenAI 兼容 /embeddings）──────────────────────────────
+// 默认走 ModelScope（跟看图共用 modelscopeToken），也可在面板填第三方 embedding 服务：
+//   config.llm.embeddingBaseUrl  = 接口地址（留空 = MS_BASE）
+//   config.llm.embeddingModel    = 模型名
+//   secrets.embeddingApiKey      = 向量专用密钥（留空 = 回退 modelscopeToken，老配置不用改）
+// 没配模型名 / 没令牌 / 接口挂了 → 静默返回 null，调用方退回纯关键词——绝不因为向量把记忆主路径拖垮。
+// 不走每日「动脑子」预算：这是检索地基，不是她主动想事情；但照样用 tag 记账，用量页能看见花了多少。
+/** 向量接口地址：面板填了就用第三方的，没填走魔搭默认 */
+export function embedBase() {
+  return String(readConfig().llm.embeddingBaseUrl || '').trim() || MS_BASE;
+}
+/** 向量密钥：优先向量专用 key，没有就回退魔搭令牌（向后兼容） */
+function embedKey() {
+  const s = readSecrets();
+  return s.embeddingApiKey || s.modelscopeToken || '';
+}
+export function embedReady() {
+  return !!(String(readConfig().llm.embeddingModel || '').trim() && embedKey());
+}
+
+/**
+ * 拼出真正打出去的 /embeddings 完整地址。
+ * 兼容两种填法：填基础地址（…/v1）自动补 /embeddings；
+ * 填完整地址（…/v1/embeddings）就不重复拼——很多人照着接口文档填完整路径，别让他说不通。
+ */
+export function embedUrl(baseOverride) {
+  const raw = String(baseOverride || embedBase()).replace(/\/+$/, '');
+  if (/\/embeddings$/i.test(raw)) return raw; // 已经带 /embeddings，原样用
+  return endpoint('/embeddings', raw);
+}
+
+let lastEmbedError = '';
+/** 最近一次 embed 失败的人话原因（面板「测试向量模型」拿去显示，别再只说「没回有效向量」） */
+export function embedError() { return lastEmbedError; }
+function noteEmbed(j) {
+  const msg = String(j?.error?.message || j?.errors?.message || j?.message || '');
+  if (/invalid.*model|model.*not.*found|does not exist/i.test(msg)) return `模型 ID 不对：${msg || '接口不认这个模型'}`;
+  if (/unauthor|invalid.*(key|token)|authentication/i.test(msg)) return `密钥不对或已失效：${msg || ''}`;
+  if (/rate.?limit|429/i.test(msg)) return '接口限流了，等会儿再试';
+  return msg || '';
+}
+
+/**
+ * 把一组文本打成向量。返回 number[][]（顺序与输入一致），任何失败都返回 null。
+ * opts 里的 model/baseUrl/apiKey/fetchFn 只给测试换假接口用，生产一律走 config + secrets。
+ */
+export async function embed(texts, { model, baseUrl, apiKey, fetchFn = fetch } = {}) {
+  lastEmbedError = '';
+  const inputs = (Array.isArray(texts) ? texts : [texts]).map((t) => String(t ?? '').slice(0, 512));
+  if (!inputs.length || inputs.every((t) => !t)) return null;
+  const em = String(model || readConfig().llm.embeddingModel || '').trim();
+  const token = apiKey || embedKey();
+  if (!em || !token) return null;
+  const url = embedUrl(baseUrl);
+  try {
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ model: em, input: inputs }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) { lastEmbedError = `接口回 HTTP ${res.status}${noteEmbed(j) ? '：' + noteEmbed(j) : ''}（打的地址：${url}）`; return null; }
+    const rows = Array.isArray(j.data) ? j.data : [];
+    const byIndex = rows.map((r) => ({ i: Number(r.index) || 0, v: r.embedding })).filter((r) => Array.isArray(r.v));
+    if (byIndex.length < inputs.length) { lastEmbedError = `接口没回够向量（要 ${inputs.length} 条、回了 ${byIndex.length} 条）；地址：${url}`; return null; }
+    byIndex.sort((a, b) => a.i - b.i);
+    const out = byIndex.map((r) => r.v.map(Number)).filter((v) => v.length && v.every(Number.isFinite));
+    if (out.length !== inputs.length) { lastEmbedError = '向量里有非法数值'; return null; }
+    return out;
+  } catch (e) {
+    lastEmbedError = `连不上接口（${e?.cause?.code || e?.message || '网络错误'}）；地址：${url}`;
+    return null; // 断网 / 超时 / 限流：静默退回纯关键词，重试交给上层或下次回填
+  }
+}
+
 /** 列出接口支持的模型（OpenAI 兼容的 GET /models） */
 export async function listModels({ baseUrl, apiKey, fetchFn = fetch } = {}) {
   let res;

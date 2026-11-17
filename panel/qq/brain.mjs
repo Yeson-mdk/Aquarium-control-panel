@@ -118,7 +118,13 @@ export async function contextText(message = '', qq = readConfig().qq.ownerQQ, pe
   const isGroup = String(peer).startsWith('g:');
   // 别人说话时按对话钥匙翻记忆（2.8）：她自己的事（B站生活）照旧全局可见，本群/本私聊的日结和
   // 合成印象放行，号主的、别的对话的一律不进上下文（不然「老大」这类称呼会安到陌生人头上）
-  const past = message ? memory.recallText(message, isOwner ? { k: 3 } : { k: 3, scope: [String(peer)] }) : '';
+  // 阶段四 4A：热路径预取 query 向量（async 搭车点），拿到才启用语义召回；没配模型/接口挂了 → 不传，
+  // recall 自动退回纯关键词。queryVec 只是排序输入，scope/dead 的可见性闸在 recall 里照旧先过。
+  let queryVec;
+  if (message && llm.embedReady()) {
+    try { const v = await llm.embed([message]); if (v?.[0]) queryVec = v[0]; } catch { /* 静默退回关键词 */ }
+  }
+  const past = message ? memory.recallText(message, isOwner ? { k: 3, queryVec } : { k: 3, scope: [String(peer)], queryVec }) : '';
   // 群里带一份群友名录（谁是谁、聊过什么，免得张冠李戴）；私聊好友带他自己的档案；号主带他的事 + 朋友圈名录
   const who = isGroup
     ? (friends.rosterText(peer) || `## 这个群里的人\n（都还不熟，看 [名字] 分辨是谁在说话）`)
