@@ -8,7 +8,6 @@
 
 ![Node](https://img.shields.io/badge/Node-%E2%89%A522-339933?logo=node.js&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/npm%20deps-0-brightgreen)
-![Tests](https://img.shields.io/badge/tests-254%20passed-success)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20NAS-blue)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
@@ -61,6 +60,7 @@
 - 群聊 / 好友日结进记忆流，重要度由模型标分，**人名校验拦编造**，原话锚点可对账
 - 每晚从记忆里长**洞察**（带出处、可被推翻、可召回），喂给次日的晨间计划
 - **对话级召回**：A 群聊的事只在 A 群想得起来，好友的私事只在你们俩的对话里出现
+- **语义召回（可选）**：配一个 embedding 模型后，「换个说法也想得起来」——问「她最近吃过什么」能翻到「中午吃了烧腊饭」；不配就退回纯关键词，聊天完全不受影响
 - **遗忘是特性**：重要度高活得久，零碎的合成印象，再老的进 sqlite 淡忘档案（只增不删，可搜索）
 - 每晚**记忆对账**自动跑：该想起的翻得到、编造的翻不出、对话不串场
 
@@ -105,9 +105,12 @@ docker compose up -d
 | 面板位置 | 填什么 |
 | :-- | :-- |
 | **模型设置** | OpenAI 兼容接口（她的大脑；便宜档给后台动脑用） |
-| **QQ 连接** | ModelScope 访问令牌（看图、做表情用） |
+| **模型设置 → 向量模型**（选填） | 想要「换个说法也想得起来」才填：接口地址 + 模型 ID + 密钥，任意 OpenAI 兼容 embedding 服务都行（硅基流动 / 百炼 / 本地 Ollama / 魔搭）；留空 = 纯关键词，不影响聊天。详见下方说明 |
+| **QQ 连接** | ModelScope 访问令牌（看图、做表情用；向量密钥留空时也复用它走魔搭） |
 | **B 站登录** | 面板顶上红条「没登录」→ 用**她的号**扫码 |
 | **自动养号** | 选时辰、开「晨间计划」、打开总开关 |
+
+> **向量模型怎么配**：接口地址填到 `/v1` 即可（带不带 `/embeddings` 都能认），比如硅基流动 `https://api.siliconflow.cn/v1`；模型 ID 填 `BAAI/bge-m3` 这类 embedding 模型；密钥填该服务的 Key。配完点「测试向量模型」验证，再去 NAS 跑一次 `node panel/backfill-vec.mjs` 给旧记忆补向量（可反复跑、断点续传）。**DeepSeek 官方没有向量接口，别填它。**
 
 ---
 
@@ -120,7 +123,10 @@ docker compose up -d
 │   ├── llm.mjs             所有模型调用（主模型 / 看图 / 预算 / 重试）
 │   ├── autopilot.mjs       自动养号执行层（调度 tick / 会话 / 派活 / VIP / 日记）
 │   ├── plan.mjs            计划层（时辰表 / 晨间计划 / 重排 / 错过标记）
-│   ├── memory.mjs + memdb.mjs   记忆流 + sqlite 淡忘档案
+│   ├── memory.mjs + memdb.mjs   记忆流 + sqlite 淡忘档案 + 语义召回
+│   ├── backfill-vec.mjs     给旧记忆补向量（可反复跑、断点续传）
+│   ├── probe-semantic.mjs   换说法验收探针（默认 deepseek-chat 造问法）
+│   ├── probe-ms-models.mjs  拿自己的密钥实测哪些 embedding 模型能用
 │   ├── mind.mjs            内心（独白 / 兴趣 / 反思 / 洞察 / 人设演化）
 │   ├── friends.mjs / fav.mjs    朋友档案 / 好感度
 │   ├── memeimg.mjs         梗图指纹库（手写解码器 + dHash）
@@ -130,7 +136,7 @@ docker compose up -d
 │   │   ├── prompts.mjs       三套规矩（纯文本，改人设看这里）
 │   │   └── tools.mjs         工具箱（表情包 / 歌曲 / 语音 / 记忆 / 派活）
 │   ├── public/             面板前端（原生 JS 单文件，无构建）
-│   └── test/               ★ 254 项 node:test，TDD 开发
+│   └── test/               回归测试源码（node:test，不碰真实数据）
 ├── docs/                  代码导览.md（架构地图）、记忆升级计划.md（演进史）、bilibili.md 等
 ├── stickers/              她的表情包 + notes.json（场合备注 = 运行时真相源）
 ├── bilibili-mcp/          vendored bilibili-mcp-server + 补丁
@@ -249,6 +255,19 @@ flowchart TB
 **🧾 记忆与遗忘**
 记忆条目按「多久以前 × 多重要 × 跟眼下多相关」挑出来用；每晚零碎的合成印象、不重要又久没想起的慢慢淡出、再老的进 sqlite 淡忘档案备查。群聊 / 好友的记忆带对话钥匙，召回时按对话放行——不串场。
 
+**🔍 检索：关键词 + 语义**（`memory.mjs recall()` + `memdb.mjs`）
+聊天热路径上预取 query 向量，跟关键词分按 `kwW / vecW` 线性混合后一次性排序（权重面板可调）——**粗排即终排，没有二次精排**。配了向量：「买了烧腊饭」用「她最近吃过什么」也翻得到；没配：行为跟纯关键词时代逐字一致。被遗忘的旧事只有语义相似度 ≥0.35 才进候选，防止向量把八竿子打不着的档案翻出来。可见性（scope / dead / kinds）在粗排就定死，语义再像也不许跨对话漏。
+
+> **关于「LLM 精排」**：阶段四 4B 预留了 rerank 设计，当前**默认关、未实现**，检索链路是「粗排即终排」。是否启用的判定标准与设计见 `docs/记忆升级计划.md` 阶段四。
+
+验收脚本（NAS 上手动跑）：
+
+```bash
+node panel/backfill-vec.mjs                 # 配好向量后给旧记忆补向量（断点续传）
+node panel/probe-semantic.mjs               # 换说法探针：验证语义召回效果
+node panel/probe-ms-models.mjs              # 拿自己的密钥实测哪些 embedding 模型能用
+```
+
 **🌤️ 她的窗**（`sky.mjs`）
 填个城市名她就知道此刻天黑没黑、什么月相、下没下雨（Open-Meteo 免 Key），心情和想看的跟着天走。
 
@@ -285,7 +304,7 @@ Lv6 要 **28800** 经验——不投币每天 15，大约 **5 年**。
 
 ```bash
 cd panel
-node --test test/*.test.mjs        # 254 项，不碰真实数据不联网（假接口 + 临时目录）
+node --test test/*.test.mjs        # 不碰真实数据、不联网（假接口 + 临时目录）
 ```
 
 - 开发约定见 `docs/代码导览.md` 的**分层铁律**
