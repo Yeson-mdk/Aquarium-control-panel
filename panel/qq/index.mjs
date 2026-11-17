@@ -612,6 +612,11 @@ async function tick(now = Date.now()) {
     try {
       await owner.groupDigestRound({ now, remember: (x) => memory.add(x) });
     } catch (e) { console.error('[qq] 群日结没跑成：', e.message); }
+    // 约定识别（阶段三.5）：扫当天聊天里指向她的约定，存下来等到点赴约
+    try {
+      const { scanForAppointments } = await import('./appoint.mjs');
+      await scanForAppointments({ now });
+    } catch (e) { console.error('[appoint] 约定识别没跑成：', e.message); }
     // 夜里链尾最后一件事：记忆对账（通用纪律 6/7/8）——该想起的还想起、陷阱空着、对话不串场。
     // 不调模型不 touch 记忆；查询集不用人手建，首跑自动从真实记忆里挖，之后每晚自己养
     try {

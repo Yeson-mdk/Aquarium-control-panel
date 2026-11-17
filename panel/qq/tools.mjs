@@ -130,6 +130,10 @@ export function toolDefs() {
     fn('review_decide', '处理一条待审', {
       id: { type: 'string', description: '待审 id 的前 6 位' }, action: { type: 'string', enum: ['approve', 'reject'] }, text: { type: 'string', description: '号主要改成的内容，不改就不填' },
     }, ['id', 'action']),
+    fn('set_appointment', '号主让你到点提醒他/叫他/催他时调这个（明早8点叫我、工作日11点催我睡觉之类）。到点她会主动开口说一句。时间算成 ISO 字符串', {
+      dueAt: { type: 'string', description: '到点时间，ISO 字符串如 2026-11-18T08:00:00' },
+      text: { type: 'string', description: '号主的原话或提醒内容，比如「明早8点叫我起床」' },
+    }, ['dueAt', 'text']),
   ];
 }
 
@@ -372,6 +376,18 @@ export async function runTool(name, args, out) {
         await auto.approveReview(a.id, a.text || undefined, 'bot');
         return a.text ? '按他改的发了' : '发了';
       } catch (e) { return `没成：${e.message}`; }
+    }
+    case 'set_appointment': {
+      const text = String(a.text || '').trim().slice(0, 200);
+      if (!text) return '提醒什么没说';
+      const dueAt = Date.parse(a.dueAt);
+      if (!Number.isFinite(dueAt)) return '时间没认出来，让它再说清楚点';
+      const now = Date.now();
+      if (dueAt <= now) return '那个时间已经过了，让它重说一个';
+      if (dueAt > now + 7 * 86400_000) return '太远了，最多约 7 天内的';
+      const task = addTask({ type: 'appointment', executor: 'bot', source: 'bot', note: '', payload: {}, dueAt, peer: 'owner', originText: text, originMsgId: '', who: '号主' });
+      try { logAction({ kind: 'appointment', source: 'bot', ok: true, detail: `⏰ 设了个提醒：${text.slice(0, 40)} → ${new Date(dueAt).toLocaleString('zh-CN')}`, target: task.id }); } catch { /* 日志不挡正事 */ }
+      return `记下了，到点会叫他：${text}`;
     }
     default: return `没有 ${name} 这个工具`;
   }

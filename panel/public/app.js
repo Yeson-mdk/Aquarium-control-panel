@@ -485,7 +485,7 @@ function usageLine(u) {
   if (!u) return '';
   const k = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
   const lim = (used, max) => (max > 0 ? `${k(used)} / ${k(max)}` : `${k(used)}（不限）`);
-  const NAME = { mind: '内心', social: '评论区社交', comment: '评论', memory: '整理记忆', reply: '回复', diary: '日记', task: '派活', test: '测试', reflect_self: '日间复盘', idle_wander: '发呆', meta_review: '计划复盘', other: '其他' };
+  const NAME = { mind: '内心', social: '评论区社交', comment: '评论', memory: '整理记忆', reply: '回复', diary: '日记', task: '派活', test: '测试', reflect_self: '日间复盘', idle_wander: '发呆', meta_review: '计划复盘', appointment: '约定', other: '其他' };
   const tags = Object.entries(u.byTag || {}).sort((a, b) => b[1].tokens - a[1].tokens)
     .map(([t, x]) => `${NAME[t] || t} ${x.calls} 次`).join(' · ');
   return `<div class="hint" style="margin-top:8px">今天：后台 ${lim(u.bg.calls, u.limit.calls)} 次、${lim(u.bg.tokens, u.limit.tokens)} tokens；一共 ${u.calls} 次 ${k(u.tokens)} tokens${u.hitAt ? ` · <b>${hm(u.hitAt)} 用完了</b>` : ''}${tags ? `<br>${tags}` : ''}</div>`;
@@ -1820,10 +1820,25 @@ async function pageReview(main) {
   const loadTasks = async () => {
     const r = await api('/api/tasks');
     const st = { pending: ['等她', 'amber'], in_progress: ['在做', 'blue'], done: ['做完', 'green'], failed: ['没做成', 'red'], cancelled: ['取消', ''] };
-    $('#taskList').innerHTML = `<div class="tl-day">任务箱</div>` + (r.tasks.length ? `<ul class="tl">${r.tasks.slice(0, 20).map((t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">📋</div>
+    let html = `<div class="tl-day">任务箱</div>` + (r.tasks.length ? `<ul class="tl">${r.tasks.slice(0, 20).map((t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">📋</div>
       <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${st[t.status]?.[1] || ''}">${st[t.status]?.[0] || t.status}</span>${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.executor === 'bot' && t.source !== 'auto' ? '<span class="chip pink">QQ里的她</span>' : ''} ${t.resultNote ? esc(t.resultNote) : ''}
       ${t.status === 'pending' ? `<button class="btn sm ghost" data-cancel="${esc(t.id)}">取消</button>` : ''}</div></div></li>`).join('')}</ul>` : '<div class="empty">空的</div>');
+    // 约定列表（阶段三.5）：待赴约 + 已赴约
+    try {
+      const ap = await api('/api/appointments');
+      const pending = ap.pending || [];
+      const fired = (ap.fired || []).slice(0, 5);
+      if (pending.length || fired.length) {
+        html += `<div class="tl-day">约定</div>`;
+        if (pending.length) html += `<ul class="tl">${pending.map((a) => `<li><div class="time">${new Date(a.dueAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div><div class="ico">📅</div>
+          <div class="body"><div class="x">${esc(a.originText || '')}</div><div class="m"><span class="chip amber">待赴约</span>${a.who ? `<span class="chip">${esc(a.who)}</span>` : ''}${a.peer && a.peer !== 'owner' ? `<span class="chip blue">${esc(a.peer)}</span>` : ''}
+          ${a.status === 'pending' ? `<button class="btn sm ghost" data-acancel="${esc(a.id)}">取消</button>` : ''}</div></div></li>`).join('')}</ul>`;
+        if (fired.length) html += `<ul class="tl">${fired.map((a) => `<li><div class="time">${hm(a.firedAt || a.ts)}</div><div class="ico">📮</div><div class="body"><div class="x">${esc(a.originText || '')}</div><div class="m"><span class="chip green">已赴约</span></div></div></li>`).join('')}</ul>`;
+      }
+    } catch { /* 约定列表加载失败不挡任务箱 */ }
+    $('#taskList').innerHTML = html;
     $$('[data-cancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks/cancel', { id: b.dataset.cancel }); loadTasks(); })));
+    $$('[data-acancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/appointments/cancel', { id: b.dataset.acancel }); loadTasks(); })));
     // 面板在做的活：隔几秒刷新一下进度
     clearTimeout(S.taskTimer);
     if (r.tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);

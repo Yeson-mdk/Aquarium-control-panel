@@ -282,6 +282,9 @@ const routes = {
     return { ok: true, task };
   },
   'POST /api/tasks/cancel': async (_q, b) => { updateTask(b.id, { status: 'cancelled', doneAt: nowIso() }); return { ok: true }; },
+  // 约定（阶段三.5）：待兑现/已兑现/已过期
+  'GET /api/appointments': async () => { const { listAppointments } = await import('./qq/appoint.mjs'); return listAppointments(); },
+  'POST /api/appointments/cancel': async (_q, b) => { updateTask(String(b?.id || ''), { status: 'cancelled', doneAt: nowIso() }); return { ok: true }; },
 
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),

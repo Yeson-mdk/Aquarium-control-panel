@@ -156,6 +156,8 @@ async function tick() {
   const cfg = readConfig();
   // 排队的 QQ 提醒：你一开口就补上（不受自动养号开关影响）
   notify.flushPending(readReview).catch(() => {});
+  // 约定赴约：扫到期约定，到点主动开口（不受自动养号开关影响，照 flushPending 范式）
+  import('./qq/appoint.mjs').then((m) => m.scanDueAppointments(now)).catch((e) => console.error('[autopilot] 约定赴约', e.message));
   if (!live.running) mind.maybeReflect().catch(() => {});
   // 号主叫停了：叫停前就在刷的这一轮也停下（叫停之后他自己点的、派的照做）
   const pause = readPause(now);
