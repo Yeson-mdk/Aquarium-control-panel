@@ -811,9 +811,11 @@ test('send_selfie：糊弄池=备注写了 send_selfie 的那几张，代码随�
   try {
     const png = Buffer.from('89504e470d0a1a0a' + 'ff'.repeat(128), 'hex');
     for (const n of ['zibai_自拍', 'nvpu_女仆', 'yu3_鱼', 'maid_女仆']) writeFileSync(join(STICKERS, n + '.png'), png);
-    // 池子应该跟备注走而不是写死的名单：maid 的备注挂上 send_selfie、zibai 的备注去掉
+    // 池子应该跟备注走而不是写死的名单。备注全部自己种（仓库的 notes.json 只有基础 12 条，不带自拍条目——别依赖它）
     const nt = JSON.parse(origNotes);
     nt['maid_女仆'] = '被要自拍才发，走 send_selfie 随机，别自己挑';
+    nt['nvpu_女仆'] = '被要自拍才发，走 send_selfie 随机，别自己挑';
+    nt['yu3_鱼'] = '被要自拍才发，走 send_selfie 随机，别自己挑';
     delete nt['zibai_自拍'];
     writeFileSync(NOTES, JSON.stringify(nt, null, 2));
     const picks = new Set();

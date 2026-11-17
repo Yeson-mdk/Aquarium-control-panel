@@ -139,7 +139,9 @@ export function toolDefs() {
 
 /** 执行一个工具调用；返回给模型看的结果（字符串），顺便把要发的东西塞进 out */
 export async function runTool(name, args, out) {
-  if (out && out.peerKey && out.peerKey !== 'owner' && !PUBLIC_TOOLS.includes(name)) return '这个只有号主能用'; // 公共模式只放 PUBLIC_TOOLS：发/存表情包、语音、查梗，花钱的和动号主数据的都不放
+  // 号主在群里说话也算号主（isOwner=true）：放行号主专属工具（约定赴约要能记成发回这个群）。
+  // 别人在群里/私聊一律只放 PUBLIC_TOOLS：发/存表情包、语音、查梗，花钱的和动号主数据的都不放。
+  if (out && !out.isOwner && out.peerKey && out.peerKey !== 'owner' && !PUBLIC_TOOLS.includes(name)) return '这个只有号主能用';
   const a = args || {};
   switch (name) {
     case 'send_sticker': {
@@ -385,8 +387,15 @@ export async function runTool(name, args, out) {
       const now = Date.now();
       if (dueAt <= now) return '那个时间已经过了，让它重说一个';
       if (dueAt > now + 7 * 86400_000) return '太远了，最多约 7 天内的';
-      const task = addTask({ type: 'appointment', executor: 'bot', source: 'bot', note: '', payload: {}, dueAt, peer: 'owner', originText: text, originMsgId: '', who: '号主' });
-      try { logAction({ kind: 'appointment', source: 'bot', ok: true, detail: `⏰ 设了个提醒：${text.slice(0, 40)} → ${new Date(dueAt).toLocaleString('zh-CN')}`, target: task.id }); } catch { /* 日志不挡正事 */ }
+      // 号主私聊→owner；号主在群里说→发回那个群（peer='g:xxx'）。赴约时按 peer 回原处。
+      const peer = (out && out.isOwner && out.peerKey) || 'owner';
+      const who = (out && out.isOwner && out.name) || '号主';
+      addTask({
+        type: 'appointment', executor: 'bot', source: 'bot', note: `${peer === 'owner' ? '提醒号主' : '群里赴约'}：${text.slice(0, 40)}`,
+        payload: {}, dueAt, peer, originText: text, originMsgId: '', who,
+        // 建约定只写 appointment_set，不再同时落 kind:'task' 的「派任务」
+        logKind: 'appointment_set', logDetail: `⏰ 设了个提醒：${text.slice(0, 40)} → ${new Date(dueAt).toLocaleString('zh-CN')}`,
+      });
       return `记下了，到点会叫他：${text}`;
     }
     default: return `没有 ${name} 这个工具`;

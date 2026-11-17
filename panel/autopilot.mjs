@@ -98,6 +98,11 @@ let timer = null;
 let wasPaused = false;
 let seenBotTaskAt = 0;
 
+/** 约定是到点定时任务，不算「号主又派了新活」，不参与时辰重排 */
+export function isReplanBotTask(t) {
+  return t.type !== 'appointment' && t.executor === 'bot' && t.status === 'pending';
+}
+
 export function liveStatus() {
   return { ...live, video: live.video ? { ...live.video } : null };
 }
@@ -173,10 +178,10 @@ async function tick() {
   if (!live.running) maybeNightlyDiary(cfg, now).catch((e) => console.error('[autopilot] 日记', e.message));
   if (!cfg.enabled || live.running || social.isBusy()) return;
 
-  // 3.2 重排时机二：号主又派了新活（executor=bot），剩下的时辰重排给活让路
+  // 3.2 重排时机二：号主又派了新活（executor=bot，约定除外），剩下的时辰重排给活让路
   let botTaskAt = 0;
   for (const t of readTasks()) {
-    if (t.executor === 'bot' && t.status === 'pending') botTaskAt = Math.max(botTaskAt, Date.parse(t.ts) || 0);
+    if (isReplanBotTask(t)) botTaskAt = Math.max(botTaskAt, Date.parse(t.ts) || 0);
   }
   let botTaskNew = false;
   if (!seenBotTaskAt) seenBotTaskAt = botTaskAt; // 进程刚起来：先记住现状，别把旧活当新活

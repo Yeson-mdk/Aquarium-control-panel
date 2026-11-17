@@ -187,7 +187,7 @@ const routes = {
       account, exp, unread,
       today: todayCounts(),
       series: dailySeries(14),
-      tasksPending: readTasks().filter((t) => t.status === 'pending').length,
+      tasksPending: readTasks().filter((t) => t.status === 'pending' && t.type !== 'appointment').length,
       reviewPending: readReview().filter((r) => r.status === 'pending').length,
       autopilot: autopilotView(),
       health: health.status(),
@@ -255,7 +255,7 @@ const routes = {
   },
 
   // 任务箱
-  'GET /api/tasks': async () => ({ tasks: readTasks().slice(0, 80) }),
+  'GET /api/tasks': async () => ({ tasks: readTasks().filter((t) => t.type !== 'appointment').slice(0, 80) }),
   'POST /api/tasks': async (_q, b) => {
     const map = {
       browse: '随便刷刷B站，看到有意思的点个赞、写两句感想',

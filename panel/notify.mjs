@@ -89,8 +89,8 @@ export class NotInWindow extends Error {}
 // QQ 小号（qq/index.mjs）能主动发：不用借你的消息 id、没有一小时窗口
 const direct = () => qq.directOn();
 
-/** 直接发一条（不看开关和上限），给「测试」按钮和 notifyReview 用 */
-async function rawSend(text, kind = 'notice') {
+/** 直接发一条（不看开关和上限），给「测试」按钮、notifyReview 和约定赴约用 */
+export async function rawSend(text, kind = 'notice') {
   if (direct()) return qq.sendOwner(text, kind);
   const { appId, secret, openId, from } = credentials();
   if (!appId || !secret || !openId) {

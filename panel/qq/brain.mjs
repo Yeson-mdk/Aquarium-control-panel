@@ -468,7 +468,7 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
         '\n\n（情绪想让动作被看见就用 send_sticker 发一张，别只在文字里比划；回完这句按「好感打分」的规矩照实把该缀的标记缀在句尾——有没有感触、几分，都照真实感受来，平平无奇就不缀。）'
     },
   ];
-  const out = { peerKey: peer, imgs: imgs.slice(0, 3) }; // 这条消息里看过的图，留着让她看上就存成表情包
+  const out = { peerKey: peer, isOwner, name, imgs: imgs.slice(0, 3) }; // 这条消息里看过的图，留着让她看上就存成表情包；isOwner/name 让门禁和赴约认出「号主在群里说话」
   let cap = 600; // 撞输出上限（finish=length）会把半句话发出去、句尾的 [FAV] 也截掉：升一档再试一次
   for (let i = 0; i < 4; i++) {
     const r = await llm.chatRaw(msgs, { tools, maxTokens: cap, temperature: 0.85, tag: 'qq', essential: true, model });

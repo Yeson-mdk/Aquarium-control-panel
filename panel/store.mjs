@@ -98,11 +98,13 @@ export function readTasks() {
 }
 // executor：panel = 面板自己马上去做；bot = 进任务箱，等 QQ 里的她来认领
 // report：'qq' = 做完让她在 QQ 里跟号主汇报（QQ 里的她交给后台的活）
-export function addTask({ type, payload, note, source = 'panel', executor = 'bot', report, ...extra }) {
+// logKind/logDetail/logTarget：只改「建任务」那条日志的类别、文案、target；约定用它避免混进「派任务」
+export function addTask({ type, payload, note, source = 'panel', executor = 'bot', report, logKind = 'task', logDetail, logTarget, ...extra }) {
   const task = { id: crypto.randomUUID(), ts: nowIso(), type, payload: payload || {}, note: note || '', status: 'pending', source, executor, ...extra };
   if (report) task.report = report;
   appendJsonl(FILES.tasks, task);
-  logAction({ kind: 'task', target: type, detail: note || JSON.stringify(payload || {}), source });
+  const target = logTarget || (logKind === 'task' ? type : task.id); // 旧 task 日志 target 保持 type；约定日志挂任务 id 好追踪
+  logAction({ kind: logKind, target, detail: logDetail || note || JSON.stringify(payload || {}), source });
   return task;
 }
 export function updateTask(id, patch) { appendJsonl(FILES.tasks, { id, ...patch }); }

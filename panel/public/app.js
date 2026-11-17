@@ -124,6 +124,7 @@ const KIND = {
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'], gate: ['🎯', '插嘴裁决'],
   join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
+  appointment: ['📅', '约定'], appointment_set: ['⏰', '约定'],
 };
 const SOURCE = { auto: ['自动', 'blue'], panel: ['面板', 'violet'], bot: ['QQ里的她', 'pink'] };
 
@@ -437,9 +438,15 @@ async function pageMemory(main) {
       const soc = fr.social;
       card.innerHTML = `<div class="card-h"><h2>她的朋友们</h2><span class="small muted">群里和私聊里认识的人，一人一份小档案；互不串场，也不进她跟号主的印象</span></div>
         ${soc?.text ? `<p class="small" style="margin-top:0">💬 朋友圈近况（${esc(soc.date || '')}）：${esc(soc.text)}</p>` : ''}
-        ${friends.length ? `<ul class="vip-list">${friends.map((f) => `<li><div style="flex:1;min-width:0" class="small"><b>${esc(f.name || f.qq || '没记住名字')}</b>${f.fav ? ` <span class="chip">好感 ${f.fav.fav}%</span>` : ''}${f.groups?.length ? ` <span class="chip">群 ${esc(f.groups.join('、'))}</span>` : ''}
-          <div class="muted">最近活跃 ${ago(f.lastSeen)}</div>
-          ${(f.notes || []).slice().reverse().map((n) => `<div>${esc(n.text)} <span class="muted">${esc(n.at)}</span></div>`).join('')}</div></li>`).join('')}</ul>` : '<div class="empty">还没认识谁，去群里聊聊或有人私聊她之后，每晚整理会建档</div>'}`;
+        ${friends.length ? `<ul class="vip-list friend-list">${friends.map((f) => {
+          const groups = f.groups || [];
+          const groupText = groups.slice(0, 3).join('、') + (groups.length > 3 ? ` +${groups.length - 3}` : '');
+          return `<li><div class="friend-item small">
+            <div class="friend-title"><b>${esc(f.name || f.qq || '没记住名字')}</b>${f.fav ? `<span class="chip">好感 ${f.fav.fav}%</span>` : ''}${groups.length ? `<span class="chip friend-groups" title="全部群：${esc(groups.join('、'))}">群 ${esc(groupText)}</span>` : ''}</div>
+            <div class="muted">最近活跃 ${ago(f.lastSeen)}</div>
+            <div class="friend-notes">${(f.notes || []).slice().reverse().map((n) => `<div>${esc(n.text)} <span class="muted">${esc(n.at)}</span></div>`).join('')}</div>
+          </div></li>`;
+        }).join('')}</ul>` : '<div class="empty">还没认识谁，去群里聊聊或有人私聊她之后，每晚整理会建档</div>'}`;
     } else {
       card.innerHTML = `<div class="card-h"><h2>她自己的</h2><span class="small muted">日子 = 经历 · 想法 = 洞察与内心 · 印象·日结 = 压缩层 · 档案 = 淡忘的原文</span></div>
         <div id="memPageList"></div>`;
@@ -1785,29 +1792,81 @@ async function renderDm(out) {
 
 // ─── 待审 · 派活 ───────────────────────────────────────────
 async function pageReview(main) {
-  main.innerHTML = head('待审 · 派活', 'AI 起草的评论、回复和日记在这里等你点头；派的活面板会直接去做') +
-    `<div class="grid g-3"><div class="span-2"><div class="card"><div class="card-h"><h2>待审</h2><span class="small muted">改一改再发，或者直接丢掉</span></div><div id="rvList"><div class="empty">加载中…</div></div></div></div>
-     <div><div class="card"><div class="card-h"><h2>派活给她</h2></div>
-       <p class="small muted" style="margin-top:0">点一下她就马上去做（真看视频、按你说的点赞/分享/收藏/评论），结果写在下面。评论、回复、日记会先进「待审」。</p>
-       <div class="row wrap">${[['browse', '随便刷刷'], ['browse_like', '刷+点赞'], ['comment', '去评论'], ['diary', '写日记'], ['check', '查新消息']].map(([k, n]) => `<button class="btn sm" data-task="${k}">${n}</button>`).join('')}</div>
-       <div class="field" style="margin-top:12px"><textarea id="taskNote" placeholder="或者直接说要干嘛…" style="min-height:60px"></textarea>
-         <div class="row" style="margin-top:6px"><label class="row small muted" title="不让面板做，进任务箱等你在 QQ 里叫她"><input type="checkbox" id="taskBot"> 交给 QQ 里的她</label><span class="spacer"></span><button class="btn sm primary" id="taskCustom">派出去</button></div>
-         <div class="hint">比如：「搜「猫」看两个，喜欢就点赞收藏」「找个天文视频看完分享」「看三个，别评论」</div></div>
-       <div id="taskList"></div></div></div></div>`;
+  const QUICK = [['browse', '随便刷刷'], ['browse_like', '刷+点赞'], ['comment', '去评论'], ['diary', '写日记'], ['check', '查新消息']];
+  const ST = { pending: ['等她', 'amber'], in_progress: ['在做', 'blue'], done: ['做完', 'green'], failed: ['没做成', 'red'], cancelled: ['取消', ''] };
+  let queueTab = 'tasks';
+
+  main.innerHTML = head(
+    '待审 · 派活',
+    'AI 起草的评论、回复和日记在这里等你点头；派的活面板会直接去做',
+    `<span class="chip" id="rvStat">待审 0</span><span class="chip" id="taskStat">任务 0</span>`
+  ) +
+    `<div class="review-layout">
+      <section class="card review-main">
+        <div class="card-h"><h2>待审</h2><span class="small muted">改一改再发，或者直接丢掉</span></div>
+        <div id="rvList"><div class="empty">加载中…</div></div>
+        <details class="review-history" id="rvHistory" hidden>
+          <summary>处理过的 <span class="chip" id="rvDoneCount">0</span></summary>
+          <div id="rvDone"></div>
+        </details>
+      </section>
+
+      <aside class="review-side">
+        <section class="card quick-dispatch">
+          <div class="card-h"><h2>派活给她</h2><span class="small muted">点一下就去做</span></div>
+          <div class="row wrap quick-actions">${QUICK.map(([k, n]) => `<button class="btn sm" data-task="${k}">${n}</button>`).join('')}</div>
+          <div class="field quick-custom">
+            <textarea id="taskNote" placeholder="或者直接说要干嘛…" rows="2"></textarea>
+            <div class="row" style="margin-top:6px">
+              <label class="row small muted quick-target" title="不让面板做，进任务箱等你在 QQ 里叫她"><input type="checkbox" id="taskBot"> 交给 QQ 里的她</label>
+              <span class="spacer"></span>
+              <button class="btn sm primary" id="taskCustom">派出去</button>
+            </div>
+            <div class="hint">比如：搜「猫」看两个，喜欢就点赞收藏；找个天文视频看完分享；看三个，别评论。</div>
+          </div>
+        </section>
+
+        <section class="card queue-card">
+          <div class="card-h"><h2>任务与约定</h2><span class="small muted" id="queueStat">加载中…</span></div>
+          <div class="seg queue-tabs" id="queueTabs" role="tablist">
+            <button class="on" data-queue="tasks" role="tab" aria-selected="true">任务箱 <span class="badge" id="taskCount">0</span></button>
+            <button data-queue="appointments" role="tab" aria-selected="false">约定 <span class="badge" id="apptCount">0</span></button>
+          </div>
+          <div class="queue-pane" id="taskPane"><div class="empty">加载中…</div></div>
+          <div class="queue-pane" id="apptPane" hidden><div class="empty">加载中…</div></div>
+        </section>
+      </aside>
+    </div>`;
+
+  const switchQueue = (which) => {
+    queueTab = which;
+    $$('#queueTabs button').forEach((b) => {
+      const on = b.dataset.queue === which;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    $('#taskPane').hidden = which !== 'tasks';
+    $('#apptPane').hidden = which !== 'appointments';
+  };
+  $$('#queueTabs button').forEach((b) => (b.onclick = () => switchQueue(b.dataset.queue)));
+
   const loadRv = async () => {
     const r = await api('/api/review');
     const pending = r.list.filter((x) => x.status === 'pending');
     const done = r.list.filter((x) => x.status !== 'pending').slice(0, 10);
     S.badges.review = pending.length; renderNav();
-    $('#rvList').innerHTML = (pending.length ? pending.map((x) => `<div class="rv" data-id="${esc(x.id)}">
+    $('#rvStat').textContent = `待审 ${pending.length}`;
+    $('#rvList').innerHTML = pending.length ? pending.map((x) => `<div class="rv" data-id="${esc(x.id)}">
         <div class="row small"><span class="chip ${x.kind === 'diary' ? 'violet' : x.kind === 'reply' ? 'pink' : 'blue'}">${x.kind === 'diary' ? '📔 日记（公开动态）' : x.kind === 'reply' ? '↩️ 回复 @' + esc(x.payload?.user || '') : '💬 评论'}</span>
           ${x.kind === 'reply' ? `<span class="muted" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">TA 说：${esc(x.payload?.said || '')}</span>` : ''}
           ${x.payload?.bvid ? `<a data-bvid="${esc(x.payload.bvid)}" style="cursor:pointer" class="small">《${esc(x.payload.title)}》</a>` : ''}<span class="spacer"></span><span class="muted">${ago(x.ts)}</span></div>
         <textarea>${esc(x.text)}</textarea>
-        <div class="row" style="justify-content:flex-end"><button class="btn sm ghost danger" data-rej>不要了</button><button class="btn sm primary" data-ok>${x.kind === 'diary' ? '发动态' : '发出去'}</button></div></div>`).join('')
-      : '<div class="empty"><span class="fish">🫧</span>没有待审的。AI 起草需要在「自动养号」里配置模型</div>') +
-      (done.length ? `<div class="tl-day">处理过的</div><ul class="tl">${done.map((x) => `<li><div class="time">${hm(x.updatedAt || x.ts)}</div><div class="ico">${x.status === 'posted' ? '✅' : '🗑️'}</div><div class="body"><div class="x">${esc(x.text.slice(0, 80))}</div><div class="m">${x.status === 'posted' ? '已发' : '丢掉了'}</div></div></li>`).join('')}</ul>` : '');
-    $$('.rv').forEach((el) => {
+        <div class="row review-actions" style="justify-content:flex-end"><button class="btn sm ghost danger" data-rej>不要了</button><button class="btn sm primary" data-ok>${x.kind === 'diary' ? '发动态' : '发出去'}</button></div></div>`).join('')
+      : '<div class="empty"><span class="fish">🫧</span>没有待审的。AI 起草需要在「自动养号」里配置模型</div>';
+    $('#rvDoneCount').textContent = String(done.length);
+    $('#rvHistory').hidden = !done.length;
+    $('#rvDone').innerHTML = done.length ? `<ul class="tl compact">${done.map((x) => `<li><div class="time">${hm(x.updatedAt || x.ts)}</div><div class="ico">${x.status === 'posted' ? '✅' : '🗑️'}</div><div class="body"><div class="x">${esc(x.text.slice(0, 80))}</div><div class="m">${x.status === 'posted' ? '已发' : '丢掉了'}</div></div></li>`).join('')}</ul>` : '';
+    $$('#rvList .rv').forEach((el) => {
       const id = el.dataset.id;
       $('[data-ok]', el).onclick = async (e) => {
         const isDiary = el.querySelector('.chip.violet');
@@ -1817,34 +1876,47 @@ async function pageReview(main) {
       $('[data-rej]', el).onclick = (e) => busy(e.target, async () => { await api('/api/review/reject', { id }); loadRv(); });
     });
   };
+
+  const taskRow = (t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">📋</div>
+      <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${ST[t.status]?.[1] || ''}">${ST[t.status]?.[0] || t.status}</span>${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.executor === 'bot' && t.source !== 'auto' ? '<span class="chip pink">QQ里的她</span>' : ''}${t.resultNote ? `<span class="queue-note">${esc(t.resultNote)}</span>` : ''}
+      ${t.status === 'pending' ? `<button class="btn sm ghost" data-cancel="${esc(t.id)}">取消</button>` : ''}</div></div></li>`;
+  const apptRow = (a, fired = false) => {
+    const due = a.dueAt ? new Date(a.dueAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    return `<li><div class="time">${fired ? hm(a.firedAt || a.ts) : due}</div><div class="ico">${fired ? '📮' : '📅'}</div>
+      <div class="body"><div class="x">${esc(a.originText || '')}</div><div class="m"><span class="chip ${fired ? 'green' : 'amber'}">${fired ? '已赴约' : '待赴约'}</span>${a.who ? `<span class="chip">${esc(a.who)}</span>` : ''}${a.peer && a.peer !== 'owner' ? `<span class="chip blue">${esc(a.peer)}</span>` : ''}${!fired && a.status === 'pending' ? `<button class="btn sm ghost" data-acancel="${esc(a.id)}">取消</button>` : ''}</div></div></li>`;
+  };
+
   const loadTasks = async () => {
-    const r = await api('/api/tasks');
-    const st = { pending: ['等她', 'amber'], in_progress: ['在做', 'blue'], done: ['做完', 'green'], failed: ['没做成', 'red'], cancelled: ['取消', ''] };
-    let html = `<div class="tl-day">任务箱</div>` + (r.tasks.length ? `<ul class="tl">${r.tasks.slice(0, 20).map((t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">📋</div>
-      <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${st[t.status]?.[1] || ''}">${st[t.status]?.[0] || t.status}</span>${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.executor === 'bot' && t.source !== 'auto' ? '<span class="chip pink">QQ里的她</span>' : ''} ${t.resultNote ? esc(t.resultNote) : ''}
-      ${t.status === 'pending' ? `<button class="btn sm ghost" data-cancel="${esc(t.id)}">取消</button>` : ''}</div></div></li>`).join('')}</ul>` : '<div class="empty">空的</div>');
-    // 约定列表（阶段三.5）：待赴约 + 已赴约
-    try {
-      const ap = await api('/api/appointments');
-      const pending = ap.pending || [];
-      const fired = (ap.fired || []).slice(0, 5);
-      if (pending.length || fired.length) {
-        html += `<div class="tl-day">约定</div>`;
-        if (pending.length) html += `<ul class="tl">${pending.map((a) => `<li><div class="time">${new Date(a.dueAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</div><div class="ico">📅</div>
-          <div class="body"><div class="x">${esc(a.originText || '')}</div><div class="m"><span class="chip amber">待赴约</span>${a.who ? `<span class="chip">${esc(a.who)}</span>` : ''}${a.peer && a.peer !== 'owner' ? `<span class="chip blue">${esc(a.peer)}</span>` : ''}
-          ${a.status === 'pending' ? `<button class="btn sm ghost" data-acancel="${esc(a.id)}">取消</button>` : ''}</div></div></li>`).join('')}</ul>`;
-        if (fired.length) html += `<ul class="tl">${fired.map((a) => `<li><div class="time">${hm(a.firedAt || a.ts)}</div><div class="ico">📮</div><div class="body"><div class="x">${esc(a.originText || '')}</div><div class="m"><span class="chip green">已赴约</span></div></div></li>`).join('')}</ul>`;
-      }
-    } catch { /* 约定列表加载失败不挡任务箱 */ }
-    $('#taskList').innerHTML = html;
+    const [r, ap] = await Promise.all([
+      api('/api/tasks'),
+      api('/api/appointments').catch(() => ({ pending: [], fired: [] })),
+    ]);
+    const tasks = r.tasks || [];
+    const pendingTasks = tasks.filter((t) => t.status === 'pending');
+    const pendingAps = ap.pending || [];
+    const firedAps = (ap.fired || []).slice(0, 5);
+    $('#taskCount').textContent = String(pendingTasks.length);
+    $('#apptCount').textContent = String(pendingAps.length);
+    $('#taskStat').textContent = `任务 ${pendingTasks.length}`;
+    $('#queueStat').textContent = `${tasks.length} 条任务 · ${pendingAps.length} 条待赴约`;
+
+    const open = tasks.slice(0, 8);
+    const rest = tasks.slice(8);
+    $('#taskPane').innerHTML = tasks.length ? `<ul class="tl queue-list">${open.map(taskRow).join('')}</ul>${rest.length ? `<details class="queue-more"><summary>还有 ${rest.length} 条</summary><ul class="tl queue-list">${rest.map(taskRow).join('')}</ul></details>` : ''}` : '<div class="empty">暂时没派的活</div>';
+    $('#apptPane').innerHTML = (pendingAps.length || firedAps.length)
+      ? `${pendingAps.length ? `<div class="tl-day">待赴约</div><ul class="tl queue-list">${pendingAps.map((a) => apptRow(a)).join('')}</ul>` : ''}${firedAps.length ? `<div class="tl-day">已赴约</div><ul class="tl queue-list">${firedAps.map((a) => apptRow(a, true)).join('')}</ul>` : ''}`
+      : '<div class="empty">还没有约定</div>';
+    switchQueue(queueTab);
     $$('[data-cancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks/cancel', { id: b.dataset.cancel }); loadTasks(); })));
     $$('[data-acancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/appointments/cancel', { id: b.dataset.acancel }); loadTasks(); })));
     // 面板在做的活：隔几秒刷新一下进度
     clearTimeout(S.taskTimer);
-    if (r.tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
+    if (tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
   };
+
   const executor = () => ($('#taskBot').checked ? 'bot' : 'panel');
   const afterSend = () => {
+    switchQueue('tasks');
     toast(executor() === 'bot' ? '进任务箱了，下次在 QQ 叫她' : '她去做了，结果会写在任务箱里');
     loadTasks();
     if (executor() === 'panel') { pollLive(); setTimeout(loadTasks, 4000); }
@@ -1860,6 +1932,7 @@ async function pageReview(main) {
   loadRv().catch((e) => ($('#rvList').innerHTML = `<div class="err">${esc(e.message)}</div>`));
   loadTasks();
 }
+
 
 // ─── 养鱼日记 ──────────────────────────────────────────────
 async function pageDiary(main) {

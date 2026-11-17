@@ -10,9 +10,9 @@
  * 数据层零改 store.mjs：约定 = tasks.jsonl 一条 type:'appointment' + executor:'bot'，
  * jsonl 追加 + Map merge 天然支持 dueAt/peer/originText 等新字段。
  *
- * 护栏：每天最多兑现 2 条（todayCounts 计数挡）；过期超 1 小时不发；识别挂低峰不挂每条消息。
+ * 护栏：过期超 1 小时不发；识别挂低峰不挂每条消息；赴约次数不设上限。
  */
-import { readTasks, addTask, updateTask, todayCounts, localDate, nowIso, logAction, readConfig } from '../store.mjs';
+import { readTasks, addTask, updateTask, localDate, nowIso, logAction, readConfig } from '../store.mjs';
 import * as llm from '../llm.mjs';
 import * as memory from '../memory.mjs';
 import { readChat, digestCandidates } from './owner.mjs';
@@ -20,7 +20,6 @@ import { readChat, digestCandidates } from './owner.mjs';
 // 指向判定（照 brain.mjs:242 复用，认名字那几个词——只认叫她名字/回她的话，先紧后松）
 const DIRECT_RE = /哦鲸鲸|鲸鲸|鲸鱼|大肥鱼|肥鱼/;
 
-const DAILY_MAX = 2;          // 每天最多兑现 2 条
 const STALE_MS = 3600_000;    // 过期超 1 小时不发
 const FUTURE_LIMIT_MS = 7 * 86400_000; // 约定时间不超 7 天
 
@@ -28,9 +27,12 @@ const FUTURE_LIMIT_MS = 7 * 86400_000; // 约定时间不超 7 天
 
 /** 存一条约定。peer='owner' 是号主闹钟，'g:群号'/'p:QQ号' 是赴约 */
 export function addAppointment({ dueAt, peer, originText, originMsgId = '', who = '' }) {
+  const label = (originText || '').slice(0, 40);
   return addTask({
-    type: 'appointment', executor: 'bot', source: 'auto', note: '', payload: {},
+    type: 'appointment', executor: 'bot', source: 'auto', note: `约定：${label}`, payload: {},
     dueAt, peer, originText, originMsgId, who,
+    // 建约定只写 appointment_set，不写 kind:'task' 的「派任务」，面板不重复
+    logKind: 'appointment_set', logDetail: `📅 认出个约定：${who || '有人'}约「${label}」`,
   });
 }
 
@@ -48,16 +50,9 @@ export async function scanDueAppointments(now = Date.now()) {
     t.dueAt && t.dueAt <= now && now - t.dueAt < STALE_MS,
   );
   if (!due.length) return;
-  const cnt = (todayCounts(localDate(new Date(now))).appointment) || 0;
-  let fired = 0;
   for (const a of due) {
-    if (cnt + fired >= DAILY_MAX) {
-      logAction({ kind: 'appointment', source: 'auto', detail: `⏰ 今天已兑现 ${DAILY_MAX} 条，剩下的不发了：${a.originText?.slice(0, 40) || ''}` });
-      break;
-    }
     try {
       await fulfillAppointment(a);
-      fired++;
     } catch (e) {
       console.error('[appoint] 兑现失败', e.message);
       logAction({ kind: 'appointment', source: 'auto', ok: false, detail: `赴约失败：${e.message}`, target: a.id });
@@ -160,7 +155,6 @@ async function scanPeer(peer, now) {
     .filter((x) => x.text && x.dueAt && x.dueAt > now && x.dueAt < now + FUTURE_LIMIT_MS);
   for (const x of items) {
     addAppointment({ dueAt: x.dueAt, peer, originText: x.text, originMsgId: x.msgId, who: x.who });
-    logAction({ kind: 'appointment', source: 'auto', ok: true, detail: `📅 认出个约定：${x.who}约「${x.text.slice(0, 40)}」`, meta: { peer, dueAt: x.dueAt } });
   }
 }
 
