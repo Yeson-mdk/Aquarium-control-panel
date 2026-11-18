@@ -10,7 +10,7 @@
  *  - 从 DSH 带过来（importDsh）：一次性把 DSH 记忆里关于号主的事提炼进来，只读，不动 DSH 的文件；
  *    开发排查、工程笔记这类不是号主的事，不带。
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DATA, ROOT, nowIso, localDate, readJsonl, appendJsonl, logAction, readState, writeState } from '../store.mjs';
@@ -112,6 +112,17 @@ export function logChat({ from, text, kind, peer = 'owner', name, fid }) {
 
 export function readChat(peer = 'owner') { return readJsonl(chatFile(peer)); }
 
+/** 删掉这段对话的聊天原文 + 滚动摘要（及其备份），返回实际删掉的文件名（C4 删某人用）。号主的不许删。 */
+export function purgeChat(peer = 'owner') {
+  if (!peer || peer === 'owner') return [];
+  const base = chatFile(peer);
+  const removed = [];
+  for (const f of [base, base + '.ctx.json', base + '.ctx.json.bak']) {
+    try { if (existsSync(f)) { unlinkSync(f); removed.push(f.split(/[\\/]/).at(-1)); } } catch { /* 删不掉就报给调用方核对 */ }
+  }
+  return removed;
+}
+
 /** 最近的对话（/new 之后的、3 天内的、最多 n 条） */
 export function recentChat(n = 24, now = Date.now(), peer = 'owner') {
   const all = readChat(peer);
@@ -121,13 +132,23 @@ export function recentChat(n = 24, now = Date.now(), peer = 'owner') {
   return all.slice(start).filter((e) => e.kind !== 'reset' && Date.parse(e.ts) >= cut).slice(-n);
 }
 
-/** 最近 N 天的对话全带（追加式上下文）：5 天外的交给遗忘那套（日结/印象/档案），这层只管连续感。号主/好友/群各用各的，互不串 */
-export function recentChatDays(days = 5, max = 400, peer = 'owner') {
+/** 最近 N 天的对话全带（追加式上下文）：5 天外的交给遗忘那套（日结/印象/档案），这层只管连续感。号主/好友/群各用各的，互不串。
+ *  charBudget>0 时再加一道字符闸门（C3）：按条数取完后，从最旧往前累计字符，超预算就把前面的砍掉——
+ *  高频群一晚上几百条短消息也会撑爆窗口，条数上限挡不住，字符才是上下文体积的代理。至少留最后一条。 */
+export function recentChatDays(days = 5, max = 400, peer = 'owner', charBudget = 0) {
   const all = readChat(peer);
   const cut = Date.now() - days * 86400_000;
   let start = 0;
   for (let i = all.length - 1; i >= 0; i--) if (all[i].kind === 'reset') { start = i + 1; break; }
-  return all.slice(start).filter((e) => e.kind !== 'reset' && Date.parse(e.ts) >= cut).slice(-max);
+  const win = all.slice(start).filter((e) => e.kind !== 'reset' && Date.parse(e.ts) >= cut).slice(-max);
+  if (!(charBudget > 0)) return win;
+  let sum = 0, from = win.length;
+  for (let i = win.length - 1; i >= 0; i--) {
+    sum += String(win[i].text || '').length;
+    if (sum > charBudget) { from = i + 1; break; }
+    from = i;
+  }
+  return win.slice(Math.min(from, Math.max(0, win.length - 1))); // 单条就超预算也留最后一条，别给个空窗口
 }
 
 /** 最近一次 /new 的时间（滚动摘要盖到 reset 之后就该作废） */
@@ -282,19 +303,27 @@ export function digestCandidates(today, { top = 3 } = {}) {
 /** 群/好友日结跑一轮（阶段一）。原本写在 index.mjs 的 tick 里，挪出来是因为那边连着 NapCat 进程、
  *  测试进不去——调度本身不依赖连接。距上次 <20h 的跳过（容器半夜重启不重复结）；标记先写再干活，
  *  中途崩的代价只是这段少结一次；单群失败跳过、不拖垮后面的群。 */
-export async function groupDigestRound({ now = Date.now(), candidates = digestCandidates(localDate(new Date(now))), digest = digestGroup, remember = () => {}, log = logAction } = {}) {
+export async function groupDigestRound({ now = Date.now(), candidates = digestCandidates(localDate(new Date(now))), digest = digestGroup, remember = () => {}, log = logAction, alertFn = null } = {}) {
   const done = [];
   for (const { peer } of candidates) {
     const since = (readState().groupDigest || {})[peer] || '';
     if (now - Date.parse(since || '') < 20 * 3600_000) continue;
-    writeState({ ...readState(), groupDigest: { ...(readState().groupDigest || {}), [peer]: nowIso() } });
+    // C5：改成「跑成才写」——原来先写时间戳再跑，跑挂了这段窗口 20 小时内都不再结。
+    // 现在成功后才落标记；失败不写，下一班 tick 会重捡（digest 按 since 切窗口，不会重复记）。
     try {
       const r = await digest(peer, { since, remember });
+      writeState({ ...readState(), groupDigest: { ...(readState().groupDigest || {}), [peer]: nowIso() } });
       if (r) {
         log({ kind: 'qq', source: 'auto', detail: `📔 ${r.label} 日结：${r.read} 条 → 记了 ${r.items} 条${r.items ? `（imp 均值 ${r.meanImp}）` : ''}` });
         done.push(r);
       }
-    } catch (e) { console.error(`[qq] ${peer} 的日结没跑成：`, e.message); done.push({ peer, error: e.message }); }
+    } catch (e) {
+      console.error(`[qq] ${peer} 的日结没跑成：`, e.message);
+      done.push({ peer, error: e.message });
+      // A3 告警：动态 import 破环（alert → notify → qq/index → owner），fire-and-forget
+      const send = alertFn || ((await import('../alert.mjs')).alert);
+      send('digest:' + peer, `${peer} 日结没跑成，下一班再试：${String(e.message || e).slice(0, 60)}`).catch(() => {});
+    }
   }
   return done;
 }

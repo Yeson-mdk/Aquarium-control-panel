@@ -18,6 +18,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { logAction, readConfig } from './store.mjs';
 import * as qq from './qq/index.mjs';
+import { probeDeps } from './health-deps.mjs';
+import { alert } from './alert.mjs';
 
 const HOME = homedir();
 const APP = process.env.DSH_APP || '/Applications/DeepSeek Harness.app';
@@ -95,15 +97,37 @@ export function diagnoseOnebot(st, now = Date.now()) {
 
 let last = { ok: true, problems: [], checkedAt: 0 };
 const notified = new Set();
+// C6 外部依赖探活：每天一次，结果并进健康横幅；异步刷新不挡 QQ 接入检查
+const DEPS_TTL = 24 * 3600_000;
+let depsState = { results: {}, problems: [], checkedAt: 0, running: false };
+
+/** 每天跑一次外部依赖探活（process 起来后由 panel 定时器 fire-and-forget 调）。
+ *  新失败走 A3 告警（去抖 6h）；恢复不单独报。 */
+export async function refreshDeps({ run = probeDeps, now = Date.now() } = {}) {
+  if (depsState.running || now - depsState.checkedAt < DEPS_TTL) return depsState;
+  depsState.running = true;
+  try {
+    const r = await run({ now });
+    const before = new Set(depsState.problems.map((p) => p.code));
+    depsState = { ...r, running: false };
+    for (const p of r.problems) if (!before.has(p.code)) alert(p.code, p.text).catch(() => {});
+    return depsState;
+  } catch (e) {
+    depsState = { ...depsState, running: false };
+    return depsState;
+  }
+}
+export const depsStatus = () => depsState;
 
 /** 现查一次（顺手记录、弹通知） */
 export function check({ notify = true } = {}) {
-  if (readConfig().qq.mode === 'onebot') return report(diagnoseOnebot(qq.status()), notify);
-  if (!existsSync(APP)) return (last = { ok: true, problems: [], skipped: '没装 DSH 桌面版', checkedAt: Date.now() });
-  return report(diagnose({ host: hostVersion(), plugin: pluginInfo(), startedAt: hostStartedAt(), gateway: lastGatewayReady() }), notify);
+  const deps = depsState.problems || [];
+  if (readConfig().qq.mode === 'onebot') return report(diagnoseOnebot(qq.status()), notify, deps);
+  if (!existsSync(APP)) return report({ ok: true, problems: [], skipped: '没装 DSH 桌面版' }, notify, deps);
+  return report(diagnose({ host: hostVersion(), plugin: pluginInfo(), startedAt: hostStartedAt(), gateway: lastGatewayReady() }), notify, deps);
 }
 
-function report(r, notify) {
+function report(r, notify, depsProblems = []) {
   for (const p of r.problems) {
     if (notified.has(p.code)) continue;
     notified.add(p.code);
@@ -116,7 +140,9 @@ function report(r, notify) {
   // 好了就把「已通知」清掉，下次再坏还会提醒
   for (const code of [...notified]) if (!r.problems.some((p) => p.code === code)) notified.delete(code);
   if (!last.ok && r.ok) logAction({ kind: 'health', source: 'auto', detail: 'QQ 接入恢复了' });
-  last = { ...r, checkedAt: Date.now() };
+  // C6：外部依赖问题并进横幅（不弹「QQ 断了」那条旧文案，它的告警走 A3）
+  const problems = [...r.problems, ...depsProblems];
+  last = { ...r, problems, ok: !problems.length, deps: depsState.results, checkedAt: Date.now() };
   return last;
 }
 

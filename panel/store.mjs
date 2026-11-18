@@ -252,6 +252,7 @@ audience: 'owner', // 'owner' = 只跟号主聊；'public' = 好友私聊都聊 
     reviewModel: '', // 插嘴打分 review 档的仲裁模型（如 deepseek-chat）：填了才启用，把拿不准的消息再让模型筛一道；空 = review 照旧直接进池
     ttsVoice: '', // 她的嗓音：微软 edge-tts 音色名（面板「她的嗓音」下拉选），空 = 按人设默认（Meijia/Flo/Eddy 各有各的）
     model: '', // 聊天用的模型，空 = 跟上面「模型」一样
+    modelFallback: '', // 备用聊天模型（A1）：主模型报 API Key/模型名/地址/余额这类配置错时降档重试一次；空 = 不降档
     reachOut: true, // 白天隔了很久没听到你说话，她会自己想想要不要找你
     reachOutMax: 2, // 一天最多主动找几次
     silentHours: 4, // 你多久没说话才算「隔了很久」

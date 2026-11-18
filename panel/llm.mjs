@@ -171,6 +171,34 @@ export async function chatRaw(messages, { maxTokens = 300, temperature = 0.9, ta
   }
 }
 
+/**
+ * A1 聊天降级链：主模型报「配置/付费」类错（Key 失效、模型名/地址写错、余额不足）时，
+ * 换备用模型重试一次。429/5xx/网络抖动 chatRaw 内部已经重试过，这里不重复包——
+ * 那种错换模型也没用，白等一轮。只给聊天热路径用（brain.reply 等），后台任务照旧。
+ */
+export function isConfigError(err) {
+  const m = String(err?.message || err || '');
+  return /API Key 不对|API Key|接口地址不对|模型名格式不对|没有这个模型|余额|insufficient|quota|billing|payment required/i.test(m);
+}
+
+export async function chatRawWithFallback(messages, opts = {}) {
+  const cfg = readConfig();
+  const primary = opts.model || cfg.llm.model || '';
+  const fallback = String(cfg.qq.modelFallback || '').trim();
+  try {
+    return await chatRaw(messages, opts);
+  } catch (e) {
+    // 没配备用、错误不是配置类、或者备用就是当前模型——原样抛，不吞
+    if (!fallback || fallback === primary || !isConfigError(e) || e instanceof BudgetError) throw e;
+    try {
+      logAction({ kind: 'llm', source: 'auto', ok: false, target: primary, detail: `聊天主模型报错（${String(e.message).slice(0, 80)}），降档到备用模型 ${fallback}` });
+    } catch { /* 日志不挡 */ }
+    // 告警走动态 import 破 llm→notify→llm 的环；发不出去也不影响降档
+    import('./alert.mjs').then((m) => m.alert('llm:fallback', `聊天主模型 ${primary} 挂了，已自动换备用 ${fallback}（6 小时内不重复提醒）`)).catch(() => {});
+    return chatRaw(messages, { ...opts, model: fallback });
+  }
+}
+
 // ─── 看图：不走 DSH，固定走 ModelScope 的视觉模型 ───
 // QQ 里发来的图（表情包、截图、随手拍）交给一个视觉模型看一眼，返回「她看到的样子」。
 // 用哪个模型在面板「QQ 连接 → 看图」里配（qq.visionModel）；没配就返回空串，聊天里仍是 [图片]。

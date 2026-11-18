@@ -15,6 +15,7 @@ import * as sqmusic from './sqmusic.mjs';
 import * as dsh from './dsh.mjs';
 import * as owner from './owner.mjs';
 import { tuning } from './tuning.mjs';
+import { decideRate, calmMs, exemptKey } from './rate.mjs';
 import * as memory from '../memory.mjs';
 import * as recallCheck from '../recall-check.mjs';
 import * as fav from '../fav.mjs';
@@ -27,6 +28,9 @@ let bot = null;
 const convs = new Map(); // 每个对话一套：'owner'（号主）/ 'p:QQ号'（好友私聊）/ 'g:群号'（群）→ { queue, timer, busy, lastQq }
 const userFreeRate = new Map(); // 自由插嘴按人限流的记账：'peer:QQ号' → 最近几次过闸的时间戳（内存态，重启清零没关系）
 const herFreeRate = new Map(); // 她自己的熔断记账：peer → 她最近几次自由插嘴的时间戳（防跟别的模型对刷，内存态）
+const exemptDaily = new Map(); // C2 每日豁免上限：'peer:QQ号:日期' → 今天点名叫她已放行几次（跨天换 key 自动清零）
+const attackHits = new Map();  // C2 冷静窗：'peer:QQ号' → 最近几次怼/复读的时间戳
+const calmUntil = new Map();   // C2 冷静窗：'peer:QQ号' → 冷静到几毫秒（期间自由插嘴全拦）
 const conv = (peer) => { if (!convs.has(peer)) convs.set(peer, { queue: [], timer: null, busy: false, lastQq: null, seenImgs: [] }); return convs.get(peer); };
 // 她看过的图按对话留 3 分钟：人家常常发完图、隔一句才说「存成表情包」，那时图也得还在手上
 const rememberImgs = (peer, imgs) => {
@@ -48,7 +52,10 @@ export function start() {
   if (!directOn(cfg)) return;
   bot = new OneBot({ url: cfg.wsUrl, token: readSecrets().onebotToken || '' });
   bot.on('ready', (r) => logAction({ kind: 'qq', source: 'auto', detail: `QQ 小号连上了（${r?.nickname || ''} ${r?.user_id || ''}）` }));
-  bot.on('close', () => logAction({ kind: 'qq', source: 'auto', ok: false, detail: 'QQ 小号断开了，会自己重连' }));
+  bot.on('close', () => {
+    logAction({ kind: 'qq', source: 'auto', ok: false, detail: 'QQ 小号断开了，会自己重连' });
+    import('../alert.mjs').then((m) => m.alert('qq:ws-close', 'QQ 小号断开了（会自重重连；6 小时内不重复提醒）')).catch(() => {});
+  });
   bot.on('message', (ev) => onMessage(ev).catch((e) => console.error('[qq]', e)));
   bot.on('event', (ev) => {
     onRequest(ev).catch((e) => console.error('[qq] 申请', e));
@@ -228,19 +235,32 @@ async function onMessage(ev) {
     // 只能让她自由插嘴这么多次；@ 她的、私聊、点名叫她的（指向你/被点名怼/短指令）不受限——
     // 那是点名不是刷屏，限流把「鲸鲸！」「不理我了」这种连着叫她的也拦掉，就成了当面装死
     if (!at) {
-      const called = !wantFree || (decision?.reasons || []).some((r) => /指向你|被点名怼|短指令/.test(r));
-      if (!called) {
-        const G = tuning().gate;
-        const rk = `${peer}:${ev.user_id}`;
-        const nowTs = Date.now();
+      const reasons = (decision?.reasons || []);
+      const called = !wantFree || reasons.some((r) => /指向你|被点名怼|短指令/.test(r));
+      const G = tuning().gate;
+      const rk = `${peer}:${ev.user_id}`;
+      const nowTs = Date.now();
+      // C2 记账快照：攻击/怼按冷静窗长度内的计数（旧的自动过期），豁免按当天，限流按人窗口
+      const attacks = (attackHits.get(rk) || []).filter((t) => nowTs - t < calmMs(G));
+      const d = decideRate({
+        called, reasons, g: G,
+        exemptUsed: exemptDaily.get(exemptKey(peer, ev.user_id)) || 0,
+        rateHits: (userFreeRate.get(rk) || []).filter((t) => nowTs - t < G.userRateWindowMin * 60_000).length,
+        calmUntil: calmUntil.get(rk) || 0,
+        attackHits: attacks.length,
+      });
+      // 落账：豁免次数、怼/复读时间戳、开新冷静窗
+      if (d.exempt) { const k = exemptKey(peer, ev.user_id); exemptDaily.set(k, (exemptDaily.get(k) || 0) + 1); }
+      if (d.attack) { attacks.push(nowTs); attackHits.set(rk, attacks); }
+      if (d.calm) { calmUntil.set(rk, nowTs + calmMs(G)); attackHits.delete(rk); }
+      if (d.allow && !called) { // 放行且是普通自由插嘴：记一次按人限流窗口（called 的不占这个名额）
         const hits = (userFreeRate.get(rk) || []).filter((t) => nowTs - t < G.userRateWindowMin * 60_000);
-        if (hits.length >= G.userRateMax) {
-          try { logAction({ kind: 'gate', source: 'auto', detail: `🎯 插嘴限流：${name || ev.user_id} ${G.userRateWindowMin} 分钟内已回 ${G.userRateMax} 次，这句不接了「${text.slice(0, 30)}」`, meta: { verdict: '限流', text: String(text || '').slice(0, 60), peer, who: name || String(ev.user_id) } }); } catch { /* 日志不挡正事 */ }
-          userFreeRate.set(rk, hits);
-          return;
-        }
-        hits.push(nowTs);
-        userFreeRate.set(rk, hits);
+        hits.push(nowTs); userFreeRate.set(rk, hits);
+      }
+      if (!d.allow) {
+        const label = { '冷静窗': '冷静窗里先不搭', '冷静·触发': '总怼/复读，歇一会儿', '豁免用尽': '今天叫她太多次了', '限流': `${G.userRateWindowMin} 分钟已回 ${G.userRateMax} 次` }[d.verdict] || d.verdict;
+        try { logAction({ kind: 'gate', source: 'auto', detail: `🎯 ${label}：${name || ev.user_id} 这句不接了「${text.slice(0, 30)}」`, meta: { verdict: d.verdict, text: String(text || '').slice(0, 60), peer, who: name || String(ev.user_id) } }); } catch { /* 日志不挡正事 */ }
+        return;
       }
     }
     const c = conv(peer);

@@ -40,6 +40,16 @@ function writeFav(data) {
   return data;
 }
 
+/** 删掉这个人的好感记录（C4）。返回 true=确实删了 */
+export function deleteUser(qq) {
+  const d = readFav();
+  const key = k(qq);
+  if (!d.users[key]) return false;
+  delete d.users[key];
+  writeFav(d);
+  return true;
+}
+
 export function ensureUser(qq) {
   const data = readFav();
   if (!data.users[k(qq)]) {

@@ -22,6 +22,7 @@ import * as mind from './mind.mjs';
 import * as memory from './memory.mjs';
 import * as social from './social.mjs';
 import * as lingo from './lingo.mjs';
+import { alert } from './alert.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
@@ -156,7 +157,10 @@ export async function executeSlot(slot) {
 // ─── 调度循环 ──────────────────────────────────────────────
 export function startScheduler() {
   if (timer) return;
-  timer = setInterval(() => tick().catch((e) => console.error('[autopilot]', e)), TICK_MS);
+  timer = setInterval(() => tick().catch((e) => {
+    console.error('[autopilot]', e);
+    alert('autopilot:tick', `后台这一拍没跑完（6 小时内不重复提醒）：${String(e?.message || e).slice(0, 60)}`); // A3 兜底
+  }), TICK_MS);
   setTimeout(() => tick().catch(() => {}), 5000);
   console.log('[autopilot] 调度器已启动');
 }

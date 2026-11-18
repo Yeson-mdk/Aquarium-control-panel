@@ -50,6 +50,7 @@ test('2.1 洞察写回流：带 id 依据、kind self / imp 5、上限 2 条、�
   assert.match(e.text, /小零.*球局/);
   assert.match(e.text, /依据/, 'text 里带上给人看的依据');
   assert.ok((e.src || []).some((s) => /球局/.test(s)), 'src 带支撑原句（人工对账用）');
+  assert.deepEqual(e.keys, ['g:9301'], 'B2：洞察继承证据来源的 keys，才在本对话里想得起来');
   assert.ok(memory.memoryView(50).insights.some((x) => x.id === e.id), '进了洞察栏');
   // 提示词纪律：每条记忆带 id、不放例句、有「只许归纳上面给的」硬规则
   const sent = JSON.stringify(llmCalls.at(-1));
@@ -57,6 +58,18 @@ test('2.1 洞察写回流：带 id 依据、kind self / imp 5、上限 2 条、�
   assert.doesNotMatch(sent, /小零在攒局/, '不放例句（例句会被复读着造假洞察）');
   assert.match(sent, /一律不许写/, '带「只用给到的素材」的事实硬规则');
   assert.match(store.readActions().at(-1).detail, /💭 今晚的洞察：1 条/, '2.7 落 💭 日志');
+});
+
+test('2.1 洞察 B2：继承来源 keys 但去掉 owner（号主私事不因归纳漏给外人）', async () => {
+  seed(5, '丁');
+  const a = memory.add({ kind: 'chat', imp: 4, keys: ['g:9302', 'owner'], text: '「群·9302」小蓝 说周末想去露营' });
+  const b = memory.add({ kind: 'chat', imp: 4, keys: ['g:9302'], text: '「群·9302」小蓝 问谁有帐篷' });
+  llmQueue.push({ content: JSON.stringify({ insights: [
+    { text: '小蓝 在张罗露营', from: [a.id, b.id], why: '连着提' },
+  ], retire: [] }) });
+  const r = await mind.insight();
+  assert.equal(r.added.length, 1);
+  assert.deepEqual(r.added[0].keys, ['g:9302'], '并集里去掉 owner，只留群钥匙');
 });
 
 test('2.1 洞察：模型把 id 连着展示格式（[id]/引号）抄回来，也该认——别整晚全拒', async () => {

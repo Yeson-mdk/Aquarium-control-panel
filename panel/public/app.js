@@ -445,6 +445,7 @@ async function pageMemory(main) {
             <div class="friend-title"><b>${esc(f.name || f.qq || '没记住名字')}</b>${f.fav ? `<span class="chip">好感 ${f.fav.fav}%</span>` : ''}${groups.length ? `<span class="chip friend-groups" title="全部群：${esc(groups.join('、'))}">群 ${esc(groupText)}</span>` : ''}</div>
             <div class="muted">最近活跃 ${ago(f.lastSeen)}</div>
             <div class="friend-notes">${(f.notes || []).slice().reverse().map((n) => `<div>${esc(n.text)} <span class="muted">${esc(n.at)}</span></div>`).join('')}</div>
+            <button class="btn-mini friend-del" data-qq="${esc(f.qq || '')}" title="删掉这个人的全部数据（不可恢复）">删掉这个人</button>
           </div></li>`;
         }).join('')}</ul>` : '<div class="empty">还没认识谁，去群里聊聊或有人私聊她之后，每晚整理会建档</div>'}`;
     } else {
@@ -454,7 +455,26 @@ async function pageMemory(main) {
     }
   };
   $$('#memSeg button', main).forEach((b) => (b.onclick = () => { S.memTab = b.dataset.v; $$('#memSeg button', main).forEach((x) => x.classList.toggle('on', x === b)); renderTab(); }));
+  $$('.friend-del', main).forEach((b) => (b.onclick = () => deleteFriendFlow(b.dataset.qq, renderTab)));
   renderTab();
+}
+
+// C4：删某人全部数据——先看清单，再输 QQ 二次确认，删完刷新列表
+async function deleteFriendFlow(qq, refresh) {
+  if (!qq) { toast('这个人还没对上 QQ 号，暂时删不了'); return; }
+  const pv = await api('/api/friends/purge-preview?qq=' + encodeURIComponent(qq)).catch(() => null);
+  if (!pv?.allowed) { toast(pv?.reason || '拉删除清单失败'); return; }
+  const lines = (pv.items || []).filter((x) => x.count).map((x) => `· ${x.label}：${x.count}${x.detail ? `（${x.detail}）` : ''}`);
+  if (!lines.length) { toast('这人没有可删的数据'); return; }
+  const ok = await confirmBox(`删掉 ${pv.name || qq} 的全部数据？`,
+    `下面是会清掉的清单（不可恢复，删了找不回来）：\n\n${lines.join('\n')}\n\n群里的聊天记录是整群的，不在这次删除范围内。`, '看清楚了，继续');
+  if (!ok) return;
+  const typed = prompt(`最后确认：请输入这个人的 QQ 号「${qq}」才会真删（输错就不删）：`);
+  if (typed !== qq) { toast('确认串不对，什么都没删'); return; }
+  const r = await api('/api/friends/purge', { qq, confirm: qq }).catch((e) => ({ ok: false, error: e.message }));
+  if (!r?.ok) { toast(r?.error || '删除失败'); return; }
+  toast(`删干净了：档案 ${r.removed.friends.length}、好感 ${r.removed.fav}、记忆 ${r.removed.memory}、聊天文件 ${r.removed.chat}`);
+  refresh?.();
 }
 
 // 点赞 / 分享被 B站 拦着时她想点的视频：你在自己浏览器里点，B站 认真浏览器
@@ -1045,6 +1065,7 @@ async function pageAutopilot(main) {
           ${tog('qq.groupFree', '群里没@也让她插嘴', '开了她会看大家聊天，想搭腔就搭一句，跟得上连续对话；要不要插、插多密全由她自己定（活跃群会增加模型调用量）')}
           <div><label class="f">机器人名单</label><input data-path="qq.botQQs" value="${esc(Array.isArray(c.qq.botQQs) ? c.qq.botQQs.join(', ') : c.qq.botQQs || '')}" placeholder="群里其他机器人的 QQ，逗号隔开" autocomplete="off"><div class="hint">名单里的人发消息，只有 @ 她、叫她名字、点她干活/怼她才接——几个模型在群里互相对话刷屏就是这么断掉的</div></div>
           <div><label class="f">聊天模型</label><input data-path="qq.model" value="${esc(c.qq.model || '')}" placeholder="留空 = 跟主模型同款" autocomplete="off"><div class="hint">只管她开口回话用的模型（私聊、被@、插嘴都算），想聊天用好模型、总结打分日记这些后台活继续用便宜主模型，就填这里。留空＝跟主模型一样</div></div>
+          <div><label class="f">备用聊天模型</label><input data-path="qq.modelFallback" value="${esc(c.qq.modelFallback || '')}" placeholder="留空 = 不降档" autocomplete="off"><div class="hint">聊天主模型的 Key 失效、模型名/地址写错、余额不足时，自动换这个模型回话一次（会提醒你，6 小时不重复）。429/网络抖动不用它——主模型自己会重试。留空＝不降档</div></div>
           <div><label class="f">插嘴仲裁模型</label><input data-path="qq.reviewModel" value="${esc(c.qq.reviewModel || '')}" placeholder="deepseek-chat，留空 = 不仲裁" autocomplete="off"><div class="hint">插嘴打分拿不准的消息（2.8~4.8 分）先让这个便宜模型问一句「接不接」，说「不接」才拦下；留空就全放行。走主模型接口的 key，DeepSeek 官方填 deepseek-chat 就行</div><div class="row" style="margin-top:6px"><button class="btn sm" id="reviewTest">测试仲裁</button><span class="small muted" id="reviewMsg"></span></div></div>
         </div>
         <div class="hint" style="margin-top:8px">打分权重、限流、防抖这些手感参数在「<a href="#/tuning">手感调参</a>」页调，改完即存即生效。</div>

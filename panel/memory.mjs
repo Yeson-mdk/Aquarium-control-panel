@@ -24,6 +24,7 @@ import { DATA, readActions, nowIso, logAction } from './store.mjs';
 import * as llm from './llm.mjs';
 import * as memdb from './memdb.mjs';
 import { tuning } from './qq/tuning.mjs';
+import { withLock } from './memlock.mjs';
 
 const { looksInjected } = llm;
 
@@ -40,7 +41,7 @@ function load() {
   } catch {
     if (existsSync(FILE)) return [];
     const all = backfill();
-    if (all.length) save(all);
+    if (all.length) withLock(() => save(all)); // 首次重建也要抢锁，别两个进程同写 FILE.tmp
     return all;
   }
 }
@@ -109,9 +110,11 @@ function embedAside(id, text) {
 export function add(x) {
   if (!x?.text || looksInjected(x.text)) return null;
   const e = entry(x);
-  const all = load();
-  all.push(e);
-  save(all);
+  withLock(() => {
+    const all = load();
+    all.push(e);
+    save(all);
+  });
   embedAside(e.id, e.text); // 落库后再打向量，add 的同步签名和返回值都不变
   return e;
 }
@@ -154,7 +157,12 @@ function scoreOf(e, rel, now, t) {
  * queryVec（阶段四 4A）：聊天热路径预取好的 query 向量。传了才启用语义混合——
  * 不传时下面的打分/过滤/兜底与 4A 之前逐字一致（CLI、测试、recall-check、mind 全是同步调用，零改动）。
  */
-export function recall(query, { keys = [], k = 3, kinds, scope, exclude = [], touch = true, now = Date.now(), queryVec } = {}) {
+export function recall(query, opts = {}) {
+  // touch=true 的 recall 会 load→改 seen/n→save，和 add/面板写同一份文件，必须串行（B1）
+  return withLock(() => recallLocked(query, opts));
+}
+
+function recallLocked(query, { keys = [], k = 3, kinds, scope, exclude = [], touch = true, now = Date.now(), queryVec } = {}) {
   const q = grams(query);
   // 短查询（「猫」「土星 UP主」）切不出几个二字片段，按词直接找
   const words = String(query || '').split(/[\s,，、。！？!?;；]+/).filter((w) => w && w.length <= 6);
@@ -247,6 +255,9 @@ export function recallText(query, opts) {
 }
 
 /** 给面板：印象（她自己概括的 gist + 每晚聊天日结）单拎出来展示，档案给个规模；recent 仍是全部（今天的事给模型看用） */
+/** 全部活记忆的只读快照（面板删除清单/审计用，别改返回值） */
+export function allEntries() { return load().map((e) => ({ ...e })); }
+
 export function memoryView(n = 30) {
   const all = load();
   const live = all.filter((e) => !e.dead); // dead = 被推翻的洞察，不进给模型看的任何一路
@@ -267,41 +278,65 @@ export function memoryView(n = 30) {
 /** 推翻一条洞察（2.3）：置 dead 标记，recall / view / 档案检索都不再放它出来；
  *  条目本身留在 memories.json 和档案里——错了还能翻回来，是标记不是删除。 */
 export function retire(id) {
-  const all = load();
-  const e = all.find((x) => x.id === id);
-  if (!e) return false;
-  e.dead = true;
-  e.seen = null;
-  save(all); // save 会同步镜像进 memdb，档案检索那边的 dead 过滤靠它
-  return true;
+  return withLock(() => {
+    const all = load();
+    const e = all.find((x) => x.id === id);
+    if (!e) return false;
+    e.dead = true;
+    e.seen = null;
+    save(all); // save 会同步镜像进 memdb，档案检索那边的 dead 过滤靠它
+    return true;
+  });
 }
 
 /** 你在面板里改：记错了的改正文、调重要程度。改过的算她刚想起来，寿命重新算 */
 export function update(id, { text, imp } = {}) {
-  const all = load();
-  const e = all.find((x) => x.id === id);
-  if (!e) return null;
-  if (text !== undefined) {
-    const t = String(text).replace(/\s+/g, ' ').trim().slice(0, 200);
-    if (!t || looksInjected(t)) return null;
-    e.text = t;
-  }
-  if (imp !== undefined) e.imp = Math.max(1, Math.min(5, Math.round(Number(imp)) || e.imp));
-  e.seen = nowIso();
-  e.edited = true;
-  save(all);
-  if (text !== undefined) embedAside(e.id, e.text); // 正文改了，旧向量作废，重打一次覆盖
-  return e;
+  let result = null;
+  withLock(() => {
+    const all = load();
+    const e = all.find((x) => x.id === id);
+    if (!e) return;
+    if (text !== undefined) {
+      const t = String(text).replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!t || looksInjected(t)) return;
+      e.text = t;
+    }
+    if (imp !== undefined) e.imp = Math.max(1, Math.min(5, Math.round(Number(imp)) || e.imp));
+    e.seen = nowIso();
+    e.edited = true;
+    save(all);
+    result = e;
+  });
+  if (result && text !== undefined) embedAside(result.id, result.text); // 正文改了，旧向量作废，重打一次覆盖
+  return result;
 }
 
 export function remove(id) {
-  const all = load();
-  const i = all.findIndex((e) => e.id === id);
-  if (i < 0) return false;
-  all.splice(i, 1);
-  memdb.purge(id); // 面板里删的，档案里也不留
-  save(all);
-  return true;
+  return withLock(() => {
+    const all = load();
+    const i = all.findIndex((e) => e.id === id);
+    if (i < 0) return false;
+    all.splice(i, 1);
+    memdb.purge(id); // 面板里删的，档案里也不留
+    save(all);
+    return true;
+  });
+}
+
+/** 按对话钥匙批量删记忆（C4 删某人全部数据）：keys 里含任一给定钥匙的条目全删，连 memdb 一起。
+ *  返回删掉的条目（给删除清单/审计用）；同样过写锁，跟 remove 一个事务口径。 */
+export function removeByKeys(wanted) {
+  const keys = (Array.isArray(wanted) ? wanted : [wanted]).map(String).filter(Boolean);
+  if (!keys.length) return [];
+  return withLock(() => {
+    const all = load();
+    const doomed = all.filter((e) => (e.keys || []).some((k) => keys.includes(String(k))));
+    if (!doomed.length) return [];
+    const ids = new Set(doomed.map((e) => e.id));
+    save(all.filter((e) => !ids.has(e.id)));
+    for (const id of ids) memdb.purge(id);
+    return doomed;
+  });
 }
 
 // ─── 每晚整理：合并、遗忘 ───────────────────────────────────
@@ -390,8 +425,13 @@ export async function tidy({ now = Date.now(), useLlm = llm.llmReady() } = {}) {
   forgot.forEach((e) => drop.add(e.id));
   if (!drop.size && !added.length) return { merged: 0, into: 0, forgot: 0, total: snap.length };
 
-  const fresh = load().filter((e) => !drop.has(e.id));
-  const all = [...fresh, ...added].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  save(all);
+  // 末尾这段重新 load→拼→save 是真正的读-改-写窗口（await 调模型那会儿不能持同步锁）。
+  // 重新 load 放在锁内，才不会把模型思考期间别人写进来的新记忆覆盖掉（B1）。
+  let all;
+  withLock(() => {
+    const fresh = load().filter((e) => !drop.has(e.id));
+    all = [...fresh, ...added].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+    save(all);
+  });
   return { merged: drop.size - forgot.length, into: added.length, forgot: forgot.length, total: all.length, gists: added.map((e) => e.text) };
 }

@@ -24,6 +24,7 @@ import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
 import * as memory from './memory.mjs';
 import * as friends from './friends.mjs';
+import * as purge from './purge.mjs';
 import * as botscore from './botscore.mjs';
 import * as stickers from './stickers.mjs';
 import * as social from './social.mjs';
@@ -32,6 +33,7 @@ import * as health from './health.mjs';
 import * as qq from './qq/index.mjs';
 import * as groups from './group-names.mjs';
 import * as owner from './qq/owner.mjs';
+import { installProcessGuard } from './guard.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
@@ -197,12 +199,20 @@ const routes = {
     };
   },
   'GET /api/health': async (q) => (q.get('fresh') ? health.check() : health.status()),
+  'GET /api/health/deps': async (q) => (q.get('fresh') ? health.refreshDeps() : health.depsStatus()), // C6 外部依赖探活（fresh=1 立即重探）
   'GET /api/fav': async () => ({ users: fav.readFav().users }),
   'GET /api/fav/recent': async () => ({ list: fav.todayDeltas(40) }), // 手感调参页：今天的单句记分流水
   'GET /api/memdb': async () => memdb.stats(),
   'POST /api/memdb/search': async (_q, b) => ({ stats: memdb.stats(), hits: memdb.search(String(b?.q || ''), { k: 30, facts: true }) }), // 号主 facts 的留底一起搜（她的 recall 不带）
   'GET /api/memory': async () => ({ ...memory.memoryView(50), insightPending: mind.readMind().insightPending || [] }), // 记忆页：在记 / 印象 / 洞察各拉 50 条 + 档案规模 + 待审洞察
   'GET /api/friends': async () => friends.friendsView(), // 记忆页「朋友们」：档案 + 好感 + 朋友圈近况
+  // C4 删某人全部数据：先 preview 列清单给号主过目，确认后 POST 带 confirm=QQ 才实删
+  'GET /api/friends/purge-preview': async (q) => purge.previewPerson(q.get('qq')),
+  'POST /api/friends/purge': async (_q, b) => {
+    const qq = String(b?.qq || '');
+    if (b?.confirm !== qq) return { ok: false, error: '确认串对不上，什么都没删——请重新点删除再确认' };
+    return purge.purgePerson(qq);
+  },
   // 谁像bot：纯读的怀疑榜单（规则加分制，不是判决）+ 一键进/出机器人名单。
   // 名单的行为在 qq/index.mjs（只有 @ 她、叫她名字、点她干活/怼她才接），这里只管名单本身。
   // 检测不自动跑：打开页面只拿群列表和名单，rows 要带 scan=1（点了「检测」按钮）才算——数据是实时的，算分交给号主手动触发
@@ -683,6 +693,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
+installProcessGuard(); // A4：兜住未捕获异常/拒绝，不让 QQ 断线、夜间链全停
+
 server.listen(PORT, HOST, () => {
   console.log(`\n🐟 养鱼面板已启动：http://${HOST}:${PORT}\n`);
   auto.startScheduler();
@@ -690,4 +702,7 @@ server.listen(PORT, HOST, () => {
   // QQ 接入体检：DSH 自动升级后插件跟不上会静悄悄掉线，5 分钟看一眼
   setTimeout(() => health.check(), 60_000);
   setInterval(() => health.check(), 5 * 60_000);
+  // C6 外部依赖探活：每天一次（内部节流），失败走 A3 告警；起来 2 分钟后先跑一次
+  setTimeout(() => health.refreshDeps().catch(() => {}), 2 * 60_000);
+  setInterval(() => health.refreshDeps().catch(() => {}), 30 * 60_000);
 });

@@ -21,7 +21,6 @@ import * as owner from './owner.mjs';
 import * as meme from './meme.mjs'; // 号主教过的黑话：注入聊天，让她平常接得住梗
 import * as fav from '../fav.mjs';
 import * as friends from '../friends.mjs';
-import * as groups from '../group-names.mjs'; // 群号↔群名表：让她认得「鲸鲸群」是哪个群
 import { tuning } from './tuning.mjs';
 import {
   ROOT, readConfig, readReview, readTasks, addTask, updateTask, readState, readPause, setPause, clearPause,
@@ -30,8 +29,10 @@ import {
 
 import { HOW, HOW_PUBLIC, HOW_GROUP, FAV_RULE, FACT_RULE } from './prompts.mjs'; // 规矩正文在 prompts.mjs，这里只消费
 import { toolDefs, runTool, stickerB64, voiceB64, PUBLIC_TOOLS } from './tools.mjs';
+import { contextText } from './context.mjs'; // C7：上下文拼装拆到独立模块，这里转出口保持外部调用不变
 // 拆分（2026-11-13）后的外部消费面不变：qq/index 和测试还从 brain 拿这些，转出口兜住
 export { toolDefs, runTool, stickerB64, voiceB64, songB64, songList, songNames, selfiePool, cleanMemeQuery } from './tools.mjs';
+export { contextText } from './context.mjs';
 
 // 好感打分规则正文在 prompts.mjs；这个是「没缀 [FAV] 标记」日志的限频时间戳（10 分钟一笔）
 let favWarnAt = 0;
@@ -84,7 +85,6 @@ export function personaInfo() {
 }
 
 // ─── 上下文 ────────────────────────────────────────────────
-const hm = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 
 // 图里有字 / 描述提到谐音时，在本轮消息末尾再推一把：先读出来再回。
@@ -105,61 +105,6 @@ export function punHint(text) {
   return `（${what}：先把那行字默读一遍，想想读音像哪个词；像就按那个词的意思接，别按字面演。那行字先调 search_meme 过一遍梗百科。查到词义后就直接接那个意思，**别先拿锅/火/画面演一句再补「我读懂了」**——最多一句垫一下，主体要接住他的情绪；被说没看懂时先想一秒，真漏了就认，别急着说「硬凑的」。）`;
 }
 
-/** 今天她自己的经历（刷了什么、跟谁聊了），给她聊天时自然提起 */
-function todayLife(today = localDate()) {
-  return memory.memoryView(40).recent
-    .filter((e) => localDate(new Date(e.ts)) === today && e.kind !== 'chat')
-    .slice(0, 8).map((e) => `- ${hm(e.ts)} ${e.text}`).join('\n');
-}
-
-export async function contextText(message = '', qq = readConfig().qq.ownerQQ, peer = 'owner') {
-  const m = mind.readMind();
-  const pause = readPause();
-  const pending = readReview().filter((r) => r.status === 'pending').length;
-  const allTasks = readTasks();
-  const busy = allTasks.filter((t) => t.report === 'qq' && (t.status === 'pending' || t.status === 'in_progress')).length;
-  // 本会话点播失败、还静默着的视频：对方任何提及（链接/「看了吗」「怎么样」）就让她照实说进度
-  const stalledHere = allTasks.filter((t) => (t.type === 'watch_video' || (t.type === 'job' && t.kind === 'watch'))
-    && t.status === 'failed' && t.failedAt
-    && t.progressReported !== true && !(t.reportPeers || [t.peer || 'owner']).every((p) => p !== peer)).slice(-3);
-  const isOwner = String(qq) === String(readConfig().qq.ownerQQ);
-  const isGroup = String(peer).startsWith('g:');
-  // 别人说话时按对话钥匙翻记忆（2.8）：她自己的事（B站生活）照旧全局可见，本群/本私聊的日结和
-  // 合成印象放行，号主的、别的对话的一律不进上下文（不然「老大」这类称呼会安到陌生人头上）
-  // 阶段四 4A：热路径预取 query 向量（async 搭车点），拿到才启用语义召回；没配模型/接口挂了 → 不传，
-  // recall 自动退回纯关键词。queryVec 只是排序输入，scope/dead 的可见性闸在 recall 里照旧先过。
-  let queryVec;
-  if (message && llm.embedReady()) {
-    try { const v = await llm.embed([message]); if (v?.[0]) queryVec = v[0]; } catch { /* 静默退回关键词 */ }
-  }
-  const past = message ? memory.recallText(message, isOwner ? { k: 3, queryVec } : { k: 3, scope: [String(peer)], queryVec }) : '';
-  // 群里带一份群友名录（谁是谁、聊过什么，免得张冠李戴）；私聊好友带他自己的档案；号主带他的事 + 朋友圈名录
-  const who = isGroup
-    ? (friends.rosterText(peer) || `## 这个群里的人\n（都还不熟，看 [名字] 分辨是谁在说话）`)
-    : `${isOwner ? '## 关于号主（最熟的那个人）你知道的' : '## 现在跟你聊的这个人'}\n${isOwner ? owner.factsText() : friends.notesText(qq) || '（这不是号主。号主的私事你知道也别说出去；对方是谁你还不熟，聊着聊着就知道了）'}`;
-  return [
-    `## 此刻\n${await sky.skyText().catch(() => `现在是 ${new Date().getHours()} 点。`)}`,
-    `## 你自己\n${mind.stateText(m)}`,
-    `## 你今天自己的经历（刷 B站 这些是你自己的事，不是他的）\n${todayLife() || '（今天还没刷）'}`,
-    past && `## 跟这句话有关、你想起来的\n${past}`,
-    who,
-    // 群名表只在号主面前展开（群友不该看到号主有哪些群、叫什么）。她说「发到 X 群」「转发到 X 群」时照这个认目标。
-    isOwner && (() => {
-      const gl = groups.listGroups().filter((g) => g.name);
-      return gl.length ? `## 你知道的群（号主在面板填的名字，说「发到 X 群 / 转发到 X 群」就照这个认群号）
-${gl.map((g) => `- ${g.peer} = ${g.name}`).join('\n')}` : '';
-    })(),
-    fav.favText(qq),
-    // 号主在群里说话：HOW 那份是「直接跟号主私聊」的口吻，不点破会把「私聊发给我」当成就地发/字面调侃。
-    // 悄悄告诉他这是号主本人（别在群里露称呼），他要说「私聊发给我/发我私聊」就是发到你们俩私聊窗口。
-    isGroup && isOwner && `## 悄悄说一句\n现在在群里说话的这个是号主本人——别在群里喊破他的身份、也别用你们私聊才用的称呼。他要是说「私聊发给我 / 发我私聊 / 私聊里发句话」，是让你把东西发到你俩的私聊窗口（工具 target 填「私聊」），不是就地发在群里、更不是让他自己过来。`,
-    !isGroup && isOwner && friends.friendsText(),
-    !isGroup && isOwner && [pause && `- 他叫停了你${pause.reason ? `（${pause.reason}）` : ''}，后台的活都停着`, pending && `- 有 ${pending} 条待审等他点头`, busy && `- 后台还有 ${busy} 件他交代的活在做`].filter(Boolean).join('\n'),
-    stalledHere.length && `## 你答应看却没看成的视频（对方要是提到，就照实说进度，别装没这回事）
-${stalledHere.map((t) => `- ${t.payload?.bvid || ''} ${String(t.note || '').slice(0, 30)}：${String(t.resultNote || '还没看成').slice(0, 60)}`).join('\n')}
-（对方问「看了吗/怎么样了」或又发了这条链接，就用你自己的话说明还没看成、原因是什么，说你记着、再发一次就重看；没提就别主动抖出来）`,
-  ].filter(Boolean).join('\n\n');
-}
 
 /** 把追加式上下文里最老的一段压成要点（滚动摘要，一直滚不过期）。群里带 [名字]，私聊就「他/我」 */
 async function foldCtx(prev, entries, isGroup) {
@@ -203,7 +148,9 @@ function cooldownKey(peer, text) {
   return compact ? `${peer}:${compact}` : `${peer}:__empty__`;
 }
 
-export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs = []) {
+/** replay=true：跑分/离线重算专用——跳过冷却期的读写，保证同一条消息反复算结果一致（无副作用）。
+ *  线上判定别传，冷却是防刷屏的活状态。 */
+export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs = [], { replay = false } = {}) {
   const raw = String(text || '');
   hasImage = hasImage || /\[图片[：:]/.test(raw); // 带描述的图（[图片：…]）也从文本认出来，试算/测试不用再传参
   const clean = raw.replace(/\[(图片|视频|表情|语音)(?:（[^\]]*）)?\]/g, '').replace(/\s+/g, ' ').trim(); // （没看清）这种占位符一并剥掉——不然「看」字会蹭中话题延续词表
@@ -329,16 +276,19 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   }
 
   // 冷却期：相同主题/相近语句在短时间内不重复接，避免刷屏。只在「没有强指向/强提问/强新信息/不是在回她」时生效。
-  const bucket = groupTopicCooldown.get(peer) || new Map();
-  const now = Date.now();
-  for (const [k, t] of bucket) if (now - t > T.cooldownSec * 1000) bucket.delete(k);
-  const sameKey = cooldownKey(peer, clean);
-  if (bucket.has(sameKey) && !direct && !asks && !hasImage && !replyingToMe && !attackCue) {
-    score += T.cooldownRepeat;
-    reasons.push('冷却期重复');
-  } else {
-    bucket.set(sameKey, now);
-    groupTopicCooldown.set(peer, bucket);
+  // replay（离线跑分）不读不写，保证同一条消息反复算分稳定——否则改权重前后对比会被冷却状态污染。
+  if (!replay) {
+    const bucket = groupTopicCooldown.get(peer) || new Map();
+    const now = Date.now();
+    for (const [k, t] of bucket) if (now - t > T.cooldownSec * 1000) bucket.delete(k);
+    const sameKey = cooldownKey(peer, clean);
+    if (bucket.has(sameKey) && !direct && !asks && !hasImage && !replyingToMe && !attackCue) {
+      score += T.cooldownRepeat;
+      reasons.push('冷却期重复');
+    } else {
+      bucket.set(sameKey, now);
+      groupTopicCooldown.set(peer, bucket);
+    }
   }
 
   const noNewValue = !direct && !asks && !cmd && !attackCue && !hasImage && overlap === 0 && !continuationCue && !replyingToMe;
@@ -463,12 +413,13 @@ export async function reply(text, { model, fids = [], qq, peer = 'owner', name =
   //    更早的交给遗忘那套（日结→印象→淡忘档案），「会遗忘才是记忆」；/new 之后摘要也作废 ──
   // 原文带几天从调参读（面板「手感调参 → 记忆窗口」改，热生效）：钳在 1~30，写坏文件也不至于把窗口打到 0
   const CTX_DAYS = Math.max(1, Math.min(30, Math.round(tuning().ctx?.days || 5)));
+  const CTX_CHAR = Math.max(0, Math.round(Number(tuning().ctx?.charBudget) || 0)); // C3 字符预算；0=不按字符截（退回纯条数）
   let ctxSum = owner.readCtxSum(peer);
   if (ctxSum) {
     const r = owner.lastResetTs(peer);
     if (Date.now() - Date.parse(ctxSum.upto) > CTX_DAYS * 86400_000 || (r && Date.parse(r) > Date.parse(ctxSum.upto))) ctxSum = null;
   }
-  let convo = owner.recentChatDays(CTX_DAYS, 400, peer).filter((e) => !fids.includes(e.fid)); // 本批的已单独给（fid 去掉——时间戳会差 1 毫秒，靠它去重）
+  let convo = owner.recentChatDays(CTX_DAYS, 400, peer, CTX_CHAR).filter((e) => !fids.includes(e.fid)); // 本批的已单独给（fid 去掉——时间戳会差 1 毫秒，靠它去重）
   if (ctxSum) convo = convo.filter((e) => Date.parse(e.ts) > Date.parse(ctxSum.upto));
   
   // 【核心修改点 A】：大幅放宽原文窗口，群聊留 200 条，私聊留 100 条。减少摘要触发。
@@ -525,7 +476,7 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
   const out = { peerKey: peer, isOwner, name, speakerQq: qq, imgs: imgs.slice(0, 3) }; // 这条消息里看过的图，留着让她看上就存成表情包；isOwner/name 让门禁和赴约认出「号主在群里说话」
   let cap = 600; // 撞输出上限（finish=length）会把半句话发出去、句尾的 [FAV] 也截掉：升一档再试一次
   for (let i = 0; i < 4; i++) {
-    const r = await llm.chatRaw(msgs, { tools, maxTokens: cap, temperature: 0.85, tag: 'qq', essential: true, model });
+    const r = await llm.chatRawWithFallback(msgs, { tools, maxTokens: cap, temperature: 0.85, tag: 'qq', essential: true, model });
     if (r.finish === 'length') {
       if (cap === 600) {
         cap = 1200; // 这轮的额度被工具参数抢掉了也会掐：后面的轮次统一升档
@@ -550,7 +501,7 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
   //    自由插嘴（free）不进这里——她选择潜水是她的自由，SKIP 早返回了，轮不到这段 ──
   if (!free && String(text).split('\n').some((l) => /^(来个表情|来一张)$/.test(l.trim())) && !out.sticker && !out.voice) {
     console.error('[qq] 命令重试：明说要图她没给，降温度再问一次');
-    let r2 = await llm.chatRaw(msgs, { tools, maxTokens: 600, temperature: 0.4, tag: 'qq', essential: true, model });
+    let r2 = await llm.chatRawWithFallback(msgs, { tools, maxTokens: 600, temperature: 0.4, tag: 'qq', essential: true, model });
     for (let j = 0; j < 2 && r2.toolCalls?.length; j++) {
       msgs.push({ role: 'assistant', content: r2.content || '', tool_calls: r2.toolCalls });
       for (const c of r2.toolCalls) {
@@ -560,7 +511,7 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
         try { result = await runTool(c.function?.name, args, out); } catch (e) { result = `出错了：${e.message}`; }
         msgs.push({ role: 'tool', tool_call_id: c.id, content: String(result).slice(0, 2000) });
       }
-      r2 = await llm.chatRaw(msgs, { tools, maxTokens: 600, temperature: 0.4, tag: 'qq', essential: true, model });
+      r2 = await llm.chatRawWithFallback(msgs, { tools, maxTokens: 600, temperature: 0.4, tag: 'qq', essential: true, model });
     }
     if (r2.content) { out.text = tidyReply(r2.content); out.favRaw = r2.content; }
   }

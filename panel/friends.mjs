@@ -81,6 +81,20 @@ export function addNote(key, text) {
   return f.notes.at(-1);
 }
 
+/** 删掉这个人的档案（C4）。返回删掉的档案 key 列表；n:名字 占位档也一起清。 */
+export function deleteFriend(key) {
+  const k = String(key || '');
+  if (!k) return [];
+  const d = readFriends();
+  const gone = [];
+  for (const key0 of Object.keys(d.friends)) {
+    const f = d.friends[key0];
+    if (key0 === k || f.qq === k || (k.startsWith('n:') && key0 === k)) { delete d.friends[key0]; gone.push(key0); }
+  }
+  if (gone.length) writeFriends(d);
+  return gone;
+}
+
 /** 私聊时带的：这个人你知道的 */
 export function notesText(qq) {
   const f = readFriends().friends[String(qq || '')];
