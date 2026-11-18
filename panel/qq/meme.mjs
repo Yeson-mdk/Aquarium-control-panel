@@ -187,3 +187,15 @@ export async function lookup(query) {
   miss.set(q, Date.now() + MISS_TTL);
   return `词库里没有收录「${q}」。可能是新梗、自造词或拼写不对，不确定就老实说不知道，别编`;
 }
+
+/**
+ * 给 QQ 聊天用：号主教过你的黑话，你认得、能接梗（跟 lingo.lingoText 配对）。
+ * 只列小词库里确认过的词（不含在线/快照百科——那些靠 search_meme 按需查）。
+ * 没有就返回空串，调用方直接忽略，不往 system 里塞废话。
+ */
+export function memeText(k = 8) {
+  const terms = readTerms();
+  const names = Object.keys(terms);
+  if (!names.length) return '';
+  return `号主教过你的黑话（别人提到就接得住，合适时自然接梗、最多用一次，别硬塞）：${names.slice(0, k).map((n) => `「${n}」= ${clip(terms[n].meaning, 30)}`).join('；')}`;
+}

@@ -59,6 +59,23 @@ test('在线没有 → 本地全量词库兜底（完整标题出现在句子里
   assert.doesNotMatch(exact, /没有同名条目/);
 });
 
+test('memeText：没教过就是空的；教过的黑话给聊天提示带意思', async () => {
+  // 只清小词库，不动 memes.db（本文件其它用例建的本地快照）
+  const { writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const f = join(DATA, 'meme-terms.json');
+  rmSync(f, { force: true });
+  // 模块在 import 时缓存了 db 句柄，但 terms 每次现读，这里清掉后就是「没教过」
+  assert.equal(meme.memeText(), '');
+  meme.addTerm('上船', '指加入了某个坑');
+  try {
+    const t = meme.memeText();
+    assert.match(t, /上船/);
+    assert.match(t, /指加入了某个坑/);
+    assert.match(t, /接得住/, '提示里带「接梗」分寸');
+  } finally { rmSync(f, { force: true }); }
+});
+
 test('在线连不上 → 本地兜底；本地也没有 → 未收录 + 10 分钟不重查', async () => {
   globalThis.fetch = async () => { throw new Error('网络炸了'); };
   assert.match(await meme.lookup('说个本地梗'), /【梗百科】本地梗/);

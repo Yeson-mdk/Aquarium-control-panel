@@ -264,6 +264,24 @@ test('brain.reply：调工具记事、发表情包，最后回一句', async () 
   assert.equal(llmCalls.at(-1).messages.filter((m) => m.role === 'tool').length, 2);
 });
 
+test('brain.reply：B站学的说法 + 号主教的黑话都进 system，让她聊天用得上', async () => {
+  const store = await import('../store.mjs');
+  const { writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const lf = join(store.DATA, 'lingo.json');
+  const mf = join(store.DATA, 'meme-terms.json');
+  writeFileSync(lf, JSON.stringify({ words: [{ phrase: '破防了', meaning: '心态崩了', at: '2026-11-01', last: '2026-11-01', n: 1 }] }));
+  writeFileSync(mf, JSON.stringify({ 上船: { meaning: '加入了某个坑', by: '号主', at: '2026-11-01' } }));
+  llmQueue.push({ content: '嗯嗯[FAV:{"d":0,"why":"闲聊"}]' });
+  try {
+    const ent = owner.logChat({ from: 'owner', text: '随便聊聊' });
+    await brain.reply('随便聊聊', { fids: [ent.fid] });
+    const sys = llmCalls.at(-1).messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n');
+    assert.match(sys, /你最近在B站学会的说法[\s\S]*破防了/, 'B站学的说法进了 system');
+    assert.match(sys, /号主教过你的黑话[\s\S]*上船/, '号主教的黑话进了 system');
+  } finally { rmSync(lf, { force: true }); rmSync(mf, { force: true }); }
+});
+
 test('事实铁律（阶段〇）：以前的事只认真有的', async () => {
   llmQueue.push({ content: '嗯嗯，你一说我就想起来了[FAV:{"d":0,"why":"闲聊"}]' });
   const ent = owner.logChat({ from: 'owner', text: '还记得咱们上次聊的那个吗' });

@@ -15,8 +15,10 @@ import { join } from 'node:path';
 import * as llm from '../llm.mjs';
 import * as memory from '../memory.mjs';
 import * as mind from '../mind.mjs';
+import * as lingo from '../lingo.mjs'; // B站学会的说法：注入聊天，让她在 QQ 里也用得上
 import * as sky from '../sky.mjs';
 import * as owner from './owner.mjs';
+import * as meme from './meme.mjs'; // 号主教过的黑话：注入聊天，让她平常接得住梗
 import * as fav from '../fav.mjs';
 import * as friends from '../friends.mjs';
 import { tuning } from './tuning.mjs';
@@ -452,8 +454,11 @@ export async function reply(text, { model, fids = [], qq, peer = 'owner', name =
   // 过闸进来的梗图再推一把：她自己的裁决放行的不是背景音，别被「默认潜水」压没了（纯文字批次不打扰）
   const memeHint = free && /\[图片[：:][^\]]*(意思是|情绪[是：]|表情包|梗图)/.test(text)
     ? '\n\n（这张梗图过了你自己的裁决才到你眼前的，不是背景音：先调 search_meme 把图上那个词过一遍梗百科——认识的也查，接得住就接一句或回一张表情包）' : '';
+  // 她自己攒的说话素材：B站学的说法 + 号主教过的黑话。跟人设一起放在逐字不变的前缀里（缓存友好），
+  // 词为空时两段都返回空串、前缀不变；有词也只是偶尔用一次，不逼她句句塞梗
+  const lingoBits = [lingo.lingoText(), meme.memeText()].filter(Boolean).map((s) => `\n\n${s}`).join('');
   const msgs = [
-    { role: 'system', content: `${persona()}${mind.personaPatchText()}\n\n${(() => {
+    { role: 'system', content: `${persona()}${mind.personaPatchText()}${lingoBits}\n\n${(() => {
       // 表情包频率从调参读（面板「手感调参 → 表情包」改，热生效）：钳 1~10，写坏文件也不至于让频率起飞
       const st = tuning().sticker || {};
       const n = Math.max(1, Math.min(10, Math.round(Number(isOwner ? st.ownerEvery : peer.startsWith('g:') ? st.groupEvery : st.friendEvery) || 2)));

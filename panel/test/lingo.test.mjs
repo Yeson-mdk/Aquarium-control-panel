@@ -1,6 +1,9 @@
 import './_env.mjs';
+import { DATA } from './_env.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 const lingo = await import('../lingo.mjs');
 
 test('collect：只攒赞多的热评，去掉回复前缀和表情', () => {
@@ -35,6 +38,16 @@ test('absorb：新的记下、又见到的加次数、30 天没见的忘掉', ()
   assert.equal(r.forgot, 1);
 });
 
-test('lingoText：没学会就是空的', () => {
+test('lingoText：没学会就是空的；有词时给聊天提示带意思', () => {
   assert.equal(lingo.lingoText(), '');
+  const f = join(DATA, 'lingo.json');
+  writeFileSync(f, JSON.stringify({ words: [
+    { phrase: '破防了', meaning: '心态崩了', at: '2026-11-01', last: '2026-11-01', n: 3 },
+  ] }));
+  try {
+    const t = lingo.lingoText();
+    assert.match(t, /破防了/);
+    assert.match(t, /心态崩了/);
+    assert.match(t, /合适就自然用一个/, '提示里带「别硬塞」的分寸');
+  } finally { rmSync(f, { force: true }); }
 });
