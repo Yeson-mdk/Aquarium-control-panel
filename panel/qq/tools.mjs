@@ -83,7 +83,7 @@ const fn = (name, description, properties = {}, required = []) => ({ type: 'func
 export function toolDefs() {
   const names = stickerNames();
   return [
-    fn('send_sticker', `发一张表情包（跟你的回复一起发）。你情绪外露的正经渠道就是它——想让动作被看见就发一张，别在文字里写动作括号。所有表情一视同仁，按当下场合挑最贴的一张（备注里写 send_selfie 的那几张只能走 send_selfie 随机，不许自己挑）：${Object.entries(stickerNotes()).map(([n, w]) => `${n}=${w}`).join(' · ')}${'\n'}号主说「把这张表情发到 X 群」时填 target，会专门发过去（面板能看到进度、发完汇报）：${Object.entries(stickerNotes()).map(([n, w]) => `${n}=${w}`).join(' · ')}`, { name: { type: 'string', enum: names, description: '表情包名' }, target: { type: 'string', description: '号主指定发到别的会话时填：群名、群号或「私聊」；就地发就不填' } }, ['name']),
+    fn('send_sticker', `发一张表情包（跟你的回复一起发）。你情绪外露的正经渠道就是它——想让动作被看见就发一张，别在文字里写动作括号。所有表情一视同仁，按当下场合挑最贴的一张（备注里写 send_selfie 的那几张只能走 send_selfie 随机，不许自己挑）：${Object.entries(stickerNotes()).map(([n, w]) => `${n}=${w}`).join(' · ')}${'\n'}号主说「把这张表情发到 X 群」时填 target，会专门发过去（面板能看到进度，发到那边直接看得到，不用你再报）：${Object.entries(stickerNotes()).map(([n, w]) => `${n}=${w}`).join(' · ')}`, { name: { type: 'string', enum: names, description: '表情包名' }, target: { type: 'string', description: '号主指定发到别的会话时填：群名、群号或「私聊」；就地发就不填' } }, ['name']),
     fn('send_selfie', '被要自拍、又想糊弄一下时调这个（随机甩一张糊弄图，不用也不许自己挑；不想发就别调，嘴硬混过去）。别用 send_sticker 发自拍类的图。号主私聊说「把自拍发到 X 群」才填 target 专门发过去；群里/别人要自拍不许填 target，就地糊弄或嘴硬——自拍只给号主一个人看', { target: { type: 'string', description: '只有号主在私聊指定发到别的会话时才填（群名/群号）；其他情况一律不填' } }),
     fn('save_sticker', '把你最近看过的那张图（3 分钟内，一般是对方刚发的）存成自己的表情包，存好以后 send_sticker 就能发（en_zh 命名）。只存表情包味的图，风景照、截图别存。备注必写：说不上来什么时候用，就说明这张不值得存', {
       en: { type: 'string', description: '一个英文小写词，比如 meng' }, zh: { type: 'string', description: '一两个中文字，比如 萌' },
@@ -104,7 +104,7 @@ export function toolDefs() {
       request: { type: 'string', description: '号主的原话' }, type: { type: 'string', enum: ['custom', 'check', 'diary'], description: 'check=看新评论私信，diary=写今天的日记，其他都是 custom' },
     }, ['request']),
     fn('list_songs', '看看自己曲库里都会唱什么歌。他问你会唱什么、没点具体歌时用这个；点了具体歌名就直接 sing_song，别用这个'),
-    fn('sing_song', '他让你唱某首歌时必调这个（唱/来一首/唱一下都算点歌）。你会什么以曲库为准、你自己的印象不可信——先查再说，查了不会的连着 SqMusic 会直接转去学。音频文件会跟回复一起发给他。号主说「去 X 群唱首歌」填 target 专门发过去；群里别人点歌就发在群里（填「这里」或不填），音乐谁点都能发', { song_name: { type: 'string' }, target: { type: 'string', description: '号主指定发到别的会话时填群名/群号/「私聊」；群里别人点歌填「这里」或不填就发现在这个群' } }, ['song_name']),
+    fn('sing_song', '他让你唱某首歌时必调这个（唱/来一首/唱一下都算点歌）。你会什么以曲库为准、你自己的印象不可信——先查再说，查了不会的连着 SqMusic 会直接转去学。音频先发出去、你再回话，所以用唱完了的语气就对。号主说「去 X 群唱首歌」填 target 专门发过去；群里别人点歌就发在群里（填「这里」或不填），音乐谁点都能发', { song_name: { type: 'string' }, target: { type: 'string', description: '号主指定发到别的会话时填群名/群号/「私聊」；群里别人点歌填「这里」或不填就发现在这个群' } }, ['song_name']),
     fn('learn_song', '去把一首还不会的歌学下来（SqMusic 下载，后台去做，下完你自己会来说）。他非要点你不会的歌、又连着 SqMusic 时用这个', { song_name: { type: 'string' } }, ['song_name']),
     fn('bili_tasks', '看看交给后台的活做到哪了'),
     fn('pause', '号主要你先停（打游戏、开会）：后台不刷、不回评论、不主动找他', { reason: { type: 'string' }, hours: { type: 'number', description: '他说了多久就填，没说就不填' } }),
@@ -227,7 +227,7 @@ async function queueMedia(kind, targetText, media, out) {
   const auto = await import('../autopilot.mjs');
   auto.runTask(task).catch((e) => updateTask(task.id, { status: 'failed', resultNote: e.message }));
   out.task = task.id;
-  return `记下了，这就把${label}发到 ${targetPeer}，发好会跟你说一声；这条应一句就行，别提前说发好了`;
+  return `记下了，这就把${label}发到 ${targetPeer}；这条应一句就行，别提前说发好了——发到那边你直接看得到，我不来回汇报了`;
 }
 
 /**
@@ -388,7 +388,7 @@ export async function runTool(name, args, out) {
         if (r !== null) return r;
       }
       out.singingTask = { song: hit, file };
-      return `《${hit}》找到了，音频会跟你的回复一起发过去。\n回一句短短的、你自己的小反应就行——小得意、假装勉强、「唱啦」两个字都可以，别每次一个腔调；偶尔磨蹭一句（「就一遍啊，听完要说好听」）也挺像你，但别回回磨蹭。别说「跑调」「破音」——发出去的是学来的原曲，质量没得挑。别提前说「唱完了」——音频是跟你这句话一起到的。`;
+      return `《${hit}》找到了，音频会先发出去，等歌到了你再说这句——所以用唱完了的语气就对，别说「这就去唱」。\n回一句短短的、你自己的小反应就行——小得意、假装勉强，两个字带过都可以，别每次一个腔调；偶尔磨蹭一句（「就一遍啊，听完要说好听」）也挺像你，但别回回磨蹭。别说「跑调」「破音」——发出去的是学来的原曲，质量没得挑。`;
     }
     case 'learn_song': {
       const want = String(a.song_name || '').trim();

@@ -415,6 +415,22 @@ function findGroupMember(peer, name) {
   return f?.qq || '';
 }
 
+/** 点歌：先把音频真正发出去，再说那句说明——群里先看到「唱啦」、几十秒后才见歌会像说空话（2026-11-18）。
+ *  歌走 slow 不占会话链；返回的 Promise 自己跑完，调用方不用 await（await 会把整个会话卡在转码上）。
+ *  say(ok)：歌发出去了才说原话，没发成说兜底句——别让「唱啦」配着一首根本没出现的歌。 */
+export async function singThenSay(task, say, deps = {}) {
+  const b64 = deps.songB64 ? deps.songB64(task.file) : brain.songB64(task.file);
+  const send = deps.sendSeg || sendSeg;
+  let ok = true;
+  try {
+    await send([seg.record(b64)], `♪ ${task.song}`, 'song', deps.peer || 'owner', 180_000, true);
+  } catch (e) {
+    ok = false;
+    console.error('[qq] 唱歌', e.message);
+  }
+  await say(ok);
+}
+
 async function deliver(out, peer = 'owner') {
   // 她要指明回谁（回的不是刚说话的人）时会在开头缀 [TO:名字]：剥掉标记、换成真的 @ 段跟第一条一起发，
   // 句子本身不用喊名字。私聊里标了就只剥掉；群里名字对不上人就当没标，裸发
@@ -426,7 +442,9 @@ async function deliver(out, peer = 'owner') {
     if (peer.startsWith('g:')) at = findGroupMember(peer, to[1]) || '';
   }
   const t = out.voice && voiceDupsText(text, out.voice.text) ? '' : text;
-  if (t) await sendChatLines(t, peer, at);
+  // 点歌时那句「唱啦」必须排在音频后面：交给 singThenSay 在歌真正发出去后再发，
+  // 这里先别发文字——不然群里先看到话、几十秒后才听到歌，像说了空话（2026-11-18）。
+  if (t && !out.singingTask) await sendChatLines(t, peer, at);
   if (out.research) doResearch(out.research);
   if (out.makeSticker) doSticker(out.makeSticker);
   if (out.sticker) {
@@ -450,12 +468,9 @@ async function deliver(out, peer = 'owner') {
       });
   }
   if (out.singingTask) {
-    // 整首歌 NapCat 要先用 ffmpeg 转成 QQ 语音格式，几十秒起步——不许让会话队列干等（一等等几分钟，
-    // 后面的话全被压成几分钟后才回的旧回复）。丢进这个对话的发送链排队，转完自己冒出来。
-    // 歌不入链的「先读文件」是同步的，这儿就把 base64 读好，排队排的是发送。
-    const b64 = brain.songB64(out.singingTask.file);
-    sendSeg([seg.record(b64)], `♪ ${out.singingTask.song}`, 'song', peer, 180_000, true)
-      .catch((e) => console.error('[qq] 唱歌', e.message));
+    // 整首歌 NapCat 要先用 ffmpeg 转成 QQ 语音格式，几十秒起步——slow 不占会话链，别让后面的话干等。
+    // 那句「唱啦」等歌真的发出去再说（singThenSay），别先说话后出歌造成歧义。
+    singThenSay(out.singingTask, (ok) => (ok && t ? sendChatLines(t, peer, at) : Promise.resolve()), { peer });
   }
   // 学歌交给后台：下载要几十秒，别让她干等着（谁点的就在哪儿说学会了）
   if (out.learnTask) doLearn(out.learnTask, peer);
@@ -483,14 +498,12 @@ function doLearn(t, peer) {
     .then(async (r) => {
       logAction({ kind: 'qq', source: 'auto', detail: `🎧 《${r.name}》学下来了（${(r.size / 1048576).toFixed(1)}MB）` });
       const line = await brain.learnReply(t.song, true, r.name, peer, t.at).catch(() => '')
-        || [`《${r.name}》学会啦，这就唱给你～`, `嗯，学好了，听听`, `《${r.name}》会了，唱啦`][Math.floor(Math.random() * 3)]; // 模型没回上就随手挑一句，别哑了也别老同一句
-      await sendText(line, 'report', peer).catch(() => {});
-      // 光说「学会了想听随时点」还得他再点一次，多余——直接唱（slow：整首歌不走发送链，别挡住后面的文字）
-      // 号主指定了别的会话（t.targetPeer）就唱到那边，否则在点的这个会话唱
-      try {
-        const to = t.targetPeer || peer;
-        await sendSeg([seg.record(brain.songB64(r.file))], `♪ ${r.name}`, 'song', to, 180_000, true);
-      } catch (e) { console.error('[qq] 学完就唱', e.message); }
+        || [`《${r.name}》学会啦，唱给你～`, `嗯，学好了，听听`, `《${r.name}》会了，唱啦`][Math.floor(Math.random() * 3)]; // 模型没回上就随手挑一句，别哑了也别老同一句；歌先发，这儿用唱完的语气
+      // 光说「学会了想听随时点」还得他再点一次，多余——直接唱。
+      // 歌先发、那句「学会啦/听听」等歌真发出去再说（跟点歌一个道理，别先说话后出歌）。
+      // 号主指定了别的会话（t.targetPeer）就唱到那边，话仍说在点的这个会话。
+      const to = t.targetPeer || peer;
+      await singThenSay({ song: r.name, file: r.file }, (ok) => (ok ? sendText(line, 'report', peer) : Promise.resolve()), { peer: to });
     })
     .catch(async (e) => {
       logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `🎧 《${t.song}》没学下来` });

@@ -247,6 +247,46 @@ test('私聊叫发到群里：任务记下「谁让我发的」，群里不冒�
   assert.equal(task.payload.attribution, 'Yeson让我发的', '群里知道是私聊里的谁叫发的');
 });
 
+test('跨群发送只回一句：成功不再回报，失败仍报（2026-11-18）', async () => {
+  clearTasks();
+  const mk = () => store.addTask({
+    type: 'send_media', executor: 'panel', source: 'bot', report: 'qq',
+    note: '把话发到 g:81234', reportPeers: ['owner'],
+    payload: { kind: 'text', text: '到家说一声', targetPeer: 'g:81234' },
+  });
+  const reports = [];
+  const opts = (sendMediaTo) => ({
+    isRunning: () => true,
+    sendMediaTo,
+    reportTask: async (t, r) => { reports.push(r); },
+  });
+  // 成功：发起会话已经有「这就去发」那句，别再回报一句
+  await auto.runTask(mk(), opts(async () => ({ ok: true })));
+  assert.equal(reports.length, 0, '发成功不再回报一句');
+  assert.equal(readTasks().find((t) => t.type === 'send_media' && t.status === 'done')?.resultNote,
+    '已把话发到 g:81234', '成功 note 照旧');
+  // 失败：必须报，不然号主以为发成了
+  await auto.runTask(mk(), opts(async () => ({ ok: false })));
+  assert.equal(reports.length, 1, '没发成仍要报一声');
+  assert.equal(reports[0].ok, false, '报的是失败');
+  assert.match(reports[0].note, /没把话发到/, '失败 note 说没发成，不说已发到');
+});
+
+test('点歌顺序：歌真正发出去之后才说「唱啦」，歌发失败就不说（2026-11-18）', async () => {
+  const qq = await import('../qq/index.mjs');
+  const calls = [];
+  const say = async (ok) => { calls.push('say:' + ok); };
+  const deps = { peer: 'g:81234', songB64: () => 'ZmFrZQ==', sendSeg: async () => { calls.push('song'); } };
+  await qq.singThenSay({ song: '晴天', file: '晴天_鱼版.mp3' }, say, deps);
+  assert.deepEqual(calls, ['song', 'say:true'], '先发歌、再说那句；且是唱完的语气');
+
+  // 歌发不出去（NapCat 转码失败）：不说「唱啦」，免得配着一首根本没出现的歌
+  calls.length = 0;
+  await qq.singThenSay({ song: '晴天', file: '晴天_鱼版.mp3' }, say,
+    { ...deps, sendSeg: async () => { calls.push('song-fail'); throw new Error('转码失败'); } });
+  assert.deepEqual(calls, ['song-fail', 'say:false'], '歌没发成，say 收到 ok=false');
+});
+
 test('跨会话发媒体：号主催一句不重复建同样的发送任务', async () => {
   clearTasks();
   groups.noteGroup('g:81234', {}); groups.setGroupName('g:81234', '测试群');

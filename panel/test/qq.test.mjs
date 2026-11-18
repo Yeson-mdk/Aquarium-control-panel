@@ -1609,6 +1609,46 @@ test('「回复她的话题」有时间窗：隔 40 分钟的不算，几分钟�
   assert.ok(brain.topicScoreMessage('好看吗', 'g:win1').reasons.includes('回复她的话题'), '她 3 分钟前刚说的，接话算回她');
 });
 
+test('话题切换后不再误判「回她的话」：真接话照接，切了新题就别蹭 +3（2026-11-18）', async () => {
+  const { writeTuning, resetTuning } = await import('../qq/tuning.mjs');
+  // 号主当前手感：replyToMe 拉到 3.0、replyWindowMin 缩到 3、pass 降到 4.3——
+  // 旧逻辑下「她刚说过话 + 短句」直接 5.4 过闸，切了话题她还插嘴
+  const U = { base: 1.8, pass: 4.3, review: 2.5, image: 0.5, memeImg: 0.3, direct: 3.4,
+    asks: 3.6, cmd: 3.2, attack: 1.2, continuation: 0.6, replyToMe: 3.0, replyWindowMin: 3,
+    overlapBase: 0.8, overlapStep: 0.5, overlapCap: 2.6, emotion: -1.6, shortOnly: -0.6,
+    repeatText: -2.7, cooldownRepeat: -2.2, noInfo: -0.8, cooldownSec: 120 };
+  writeTuning({ topic: U });
+  try {
+    const seed = (p, herText, interject = false) => {
+      owner.logChat({ from: 'her', text: herText, peer: p });
+      if (interject) owner.logChat({ from: 'u1', text: '插一句别的', peer: p });
+    };
+    // 切了新题：紧接她说 / 隔了插话，都不该蹭「回复她的话题」
+    seed('g:sw1', '烧腊饭真好吃');
+    const a = brain.topicScoreMessage('我也想玩', 'g:sw1');
+    assert.ok(!a.reasons.includes('回复她的话题'), '紧接她但换了话题：不算回她');
+    assert.equal(a.status, 'skip', '换话题的短句进不了回复池');
+    seed('g:sw2', '烧腊饭真好吃', true);
+    const b = brain.topicScoreMessage('我也想玩', 'g:sw2');
+    assert.ok(!b.reasons.includes('回复她的话题'), '隔了插话的换题短句：不算回她');
+    assert.equal(b.status, 'skip');
+    // 真接话照旧：纯情绪、她问人后的短答、纯追问（没带新话题词）都得接住
+    seed('g:sw3', '我困了，先眯会儿');
+    assert.ok(brain.topicScoreMessage('哈哈哈哈', 'g:sw3').reasons.includes('回复她的话题'), '紧接她的纯情绪：接');
+    seed('g:sw4', '今晚吃啥好呢');
+    assert.ok(brain.topicScoreMessage('都想', 'g:sw4').reasons.includes('回复她的话题'), '她问人后的短答：接');
+    seed('g:sw5', '今晚吃啥好呢', true);
+    assert.ok(brain.topicScoreMessage('都想', 'g:sw5').reasons.includes('回复她的话题'), '隔插话但她在问人：仍接');
+    seed('g:sw6', '刚看完电影出来');
+    assert.ok(brain.topicScoreMessage('好看吗', 'g:sw6').reasons.includes('回复她的话题'), '纯追问没带新话题词：接');
+    // overlap 只算最近 5 条：更早的旧话题词不该一直给新话题加分
+    seed('g:sw7', '上次说的那个显卡真贵');
+    for (let i = 0; i < 8; i++) owner.logChat({ from: 'u1', text: '聊点别的' + i, peer: 'g:sw7' });
+    const c = brain.topicScoreMessage('显卡降价了吗', 'g:sw7');
+    assert.ok(!c.reasons.includes('主题接续'), '8 条之前的旧话题词不再贡献 overlap');
+  } finally { resetTuning(); }
+});
+
 test('看不清的图（「没看清」占位符）没问就不接：别蹭成回她的话题+话题延续', async () => {
   const { appendFileSync } = await import('node:fs');
   const { join } = await import('node:path');

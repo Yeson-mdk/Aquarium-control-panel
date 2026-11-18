@@ -1103,7 +1103,9 @@ export async function runTask(task, deps = {}) {
   // QQ 里的她交给后台的活：做完（或没做成）都让她在 QQ 里说一声
   const report = (ok, note) => {
     if (task.report !== 'qq') return;
-    notify.reportTask(task, { ok, note, watched }).catch(() => {});
+    // deps.reportTask 只给测试注入用（观测「成功没多嘴、失败仍报」），线上走 notify
+    const send = deps.reportTask || notify.reportTask;
+    send(task, { ok, note, watched }).catch(() => {});
   };
   try {
     // 其它派活照旧等她这轮刷完（同一把锁串着来，免得两路 B站 请求撞风控）
@@ -1132,9 +1134,10 @@ export async function runTask(task, deps = {}) {
       const r = deps.sendMediaTo
         ? await deps.sendMediaTo(p.targetPeer, p)
         : await (await import('./qq/index.mjs')).sendMediaTo(p.targetPeer, p);
-      note = `已把${p.kind === 'song' ? `歌《${p.songName || ''}》` : p.kind === 'text' ? '话' : '表情包'}发到 ${p.targetPeer}`;
-      logAction({ kind: 'qq', source: SRC, target: p.targetPeer, detail: `📤 跨会话发媒体：${note}` });
+      const what = p.kind === 'song' ? `歌《${p.songName || ''}》` : p.kind === 'text' ? '话' : '表情包';
       ok = r?.ok !== false;
+      note = ok ? `已把${what}发到 ${p.targetPeer}` : `没把${what}发到 ${p.targetPeer}`;
+      logAction({ kind: 'qq', source: SRC, target: p.targetPeer, ok, detail: `📤 跨会话发媒体：${note}` });
     }
     else {
       plan = PRESETS[task.type]?.() || (await llm.parseTask(task.note));
@@ -1150,7 +1153,10 @@ export async function runTask(task, deps = {}) {
       ...(isWatching && !ok ? { failedAt: nowIso(), progressReported: false } : {}),
     });
     logAction({ kind: ok ? 'task_done' : 'error', source: SRC, ok, target: task.type, detail: `派的活：${task.note || task.type} → ${note}` });
-    if (!isWatching || ok) report(ok, note); // 点播失败不立即报，静默
+    // 跨会话发媒体：发起会话已经有「这就去发」那句、目标会话直接看得到东西，成功就别再回报一句
+    // （2026-11-18：发起会话两条模型话偏多）。失败仍要报，不然号主以为发成了其实没发。
+    // 点播视频照旧：失败先静默，等超时扫描/被催再说。
+    if (isMedia ? !ok : (!isWatching || ok)) report(ok, note);
   } catch (e) {
     updateTask(task.id, {
       status: 'failed', doneAt: nowIso(), resultNote: e.message, plan,

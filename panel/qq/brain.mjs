@@ -208,15 +208,38 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   hasImage = hasImage || /\[图片[：:]/.test(raw); // 带描述的图（[图片：…]）也从文本认出来，试算/测试不用再传参
   const clean = raw.replace(/\[(图片|视频|表情|语音)(?:（[^\]]*）)?\]/g, '').replace(/\s+/g, ' ').trim(); // （没看清）这种占位符一并剥掉——不然「看」字会蹭中话题延续词表
   const reasons = [];
+  // 分词/提问/话题词三件：下面判「是不是回她」和算 overlap 都要用，提前算一次。
+  // 中文没空格，整句算一个词——正好用来认「两句是不是同一个话题」，不会拿泛词乱挂钩
+  const rawTerms = (s) => [...new Set(String(s).toLowerCase().replace(/[^0-9a-z\u4e00-\u9fa5]+/g, ' ').split(/\s+/).filter((w) => w.length >= 2 && !['哈','啊','这','那','就','都','很','真','还','也','你','我','他','她','它','们','吗','呢','了','呀','嗯','好','啊啊','图片','视频','表情','语音','表情包','梗图','意思','意思是'].includes(w) /* 图片/意思是这类是格式词不是话题：两张图不能因为都带「图片」就算聊同一个话题 */))];
+  const isQuestion = (s) => /[?？]|怎么|咋|为什么|什么|啥|谁|哪|多久|要不要|行不行|好不好|能不能|可不可以|玩不玩|来不来|给个|看法|想不想|怎么看|怎么说|[吗呢][。!！?？]?$/.test(String(s || ''));
+  const CUE_RE = /(吃|喝|玩|看|做|去|走起|火锅|电影|游戏|剧情|饭|晚餐|午餐|唱|歌|聊|后面|这波|天气|热|冷|上班|下班|老板|摸鱼|放假|周末|累|困|烦|显卡|代码|bug|比赛|直播|买|钱|贵|穷)/i;
+  const CUE_ALL = new RegExp(CUE_RE.source, 'gi'); // 取全部话题词：判「是不是换了话题」要两两比对
+  const cuesIn = (s) => [...String(s || '').matchAll(CUE_ALL)].map((m) => m[0]);
   // 她刚说完、别人跟着回的（哪怕就一个「？」）是在跟她说话，不算噪音。打分发生在本条已记盘之后，
   // recent 里最后一条就是本条，滤掉再看上一条是谁说的
   const recent = owner.recentChatDays(1, 20, peer).filter((e) => e.text && e.text !== clean && /[一-龥a-z]/i.test(String(e.text || '')));
   // 群聊节奏快：上一条是她说的 → 在回她的话；隔了一两句（中间有人插话）、这句又是短答（「都想」这种），
   // 也多半是在答她刚问的——不然这类两三个字的答话会当噪音拦掉，问的人干等。
   // 但得有时间窗：窗口外她那句早翻篇了（2026-11-11 线上：隔 73 分钟的图蹭「回复她的话题」9 分过闸）
+  // 2026-11-18：光看「她说过话」会把换了话题的短句也算成回她（她聊完 A，别人聊 B，她还是插嘴）。
+  // 现在要求「接话也得有证据」：要么紧接她且没开新题，要么她刚在问人（短答是回她），要么两句踩同一个词组。
   const fresh = (e) => Date.now() - Date.parse(e.ts || 0) <= tuning().topic.replyWindowMin * 60_000;
-  const replyingToMe = (recent.at(-1)?.from === 'her' && fresh(recent.at(-1)))
-    || (String(text || '').trim().length <= 12 && recent.slice(-3).some((e) => e.from === 'her' && fresh(e)));
+  const prevHer = recent.at(-1);
+  const prevIsHer = !!prevHer && prevHer.from === 'her' && fresh(prevHer);
+  const myTerms = rawTerms(clean);
+  const shortMsg = String(text || '').trim().length <= 12;
+  const sharedWith = (e) => {
+    const ht = rawTerms(String(e?.text || ''));
+    return ht.length > 0 && myTerms.length > 0 && ht.some((t) => myTerms.includes(t));
+  };
+  // 紧接她说的：时间窗内算回她，但「她刚说完 A、别人立刻切到 B」要挡——新消息自带话题词且与她那句完全不搭时，
+  // 就是换了话题（「烧腊饭真好吃」→「我也想玩」）。纯追问/情绪（「好看吗」「哈哈哈」）没带新话题词，照旧接住。
+  // 隔了别人插话的短句兜底：同样要求她在问人 / 两句踩同一个词组，否则话题早切了还蹭 +3 分
+  const myCues = cuesIn(clean);
+  const herCues = prevIsHer ? cuesIn(prevHer?.text) : [];
+  const topicSwitched = prevIsHer && myCues.length > 0 && herCues.length > 0 && !myCues.some((c) => herCues.includes(c));
+  const replyingToMe = (prevIsHer && !!prevHer && !topicSwitched)
+    || (shortMsg && recent.slice(-3).some((e) => e.from === 'her' && fresh(e) && (isQuestion(e.text) || sharedWith(e))));
 
   // 梗图/表情包式的图：看图模型给的是「意思是/情绪是」而不是画面内容——那是语气不是新话题。
   // 规矩（按号主 demo）：冷发杂图不接；接着她话发的纯情绪梗图（开心/得意收尾）不接；
@@ -266,10 +289,10 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   const T = tuning().topic;
   let score = T.base; // 底分：普通一句闲聊不该 0 分起步，不然平淡两句就全被拦成「装死」
   const direct = /哦鲸鲸|鲸鲸|鲸鱼|大肥鱼|肥鱼/.test(clean); // 指向她只认叫名字（鲸鱼兜住「小鲸鱼」——她自己都让人喊小鲸鱼）。「你」和「你觉得/你说」这类满群都是，谁也没特指谁，不算；「公主」误伤高（游戏群里常指别人），不加
-  const asks = /[?？]|怎么|咋|为什么|什么|啥|谁|哪|多久|要不要|行不行|好不好|能不能|可不可以|玩不玩|来不来|给个|看法|想不想|怎么看|怎么说|[吗呢][。!！?？]?$/.test(clean);
+  const asks = isQuestion(clean);
   const cmd = /^(唱|跳|来一首|来一个|来一张|说两句|唱一个|唱一下|来段语音|来个表情)$/i.test(clean); // 群友冷不丁蹦一个字的指令：话虽短，是在点她干活，不能当没看见
   const attackCue = /[蠢笨傻呆坏懒憨]鱼|(?:只会)?找茬|破防|骂谁/.test(clean); // 被拿外号点名嘲讽/激将：字再少也是在冲她来的，装死比回嘴更失礼。咸鱼/摸鱼/鱼香肉丝不含侮辱字+鱼的连排，不会误伤
-  const continuationCue = /(吃|喝|玩|看|做|去|走起|火锅|电影|游戏|剧情|饭|晚餐|午餐|唱|歌|聊|后面|这波|天气|热|冷|上班|下班|老板|摸鱼|放假|周末|累|困|烦|显卡|代码|bug|比赛|直播|买|钱|贵|穷)/i.test(clean);
+  const continuationCue = CUE_RE.test(clean);
   const emotion = !replyingToMe && (/^(哈哈|啊这|笑死|离谱|牛啊|好家伙|神了|急了|哭了|好笑|好耶|草|qwq|x_x|orz|略略|太强了|这波|233)+$/i.test(clean) || (/(?:哈哈|啊这|笑死|离谱|神了|草|233|好家伙|急了|哭了)/i.test(clean) && clean.length <= 20 && !direct && !asks)); // 别人回她的话哪怕是纯哈哈哈也是接茬，不当噪音
   const shortOnly = clean.length <= 12 && !direct && !asks && !cmd && !hasImage && !replyingToMe && !attackCue; // 别人回她话的短句（「？」「行」）是接茬，不是噪音；点她干活/怼她的短指令另算
 
@@ -284,10 +307,11 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   if (emotion) { score += T.emotion; reasons.push('纯情绪'); }
   if (shortOnly) { score += T.shortOnly; reasons.push('短句且无信息'); }
 
-  const rawTerms = (s) => [...new Set(String(s).toLowerCase().replace(/[^0-9a-z\u4e00-\u9fa5]+/g, ' ').split(/\s+/).filter((w) => w.length >= 2 && !['哈','啊','这','那','就','都','很','真','还','也','你','我','他','她','它','们','吗','呢','了','呀','嗯','好','啊啊','图片','视频','表情','语音','表情包','梗图','意思','意思是'].includes(w) /* 图片/意思是这类是格式词不是话题：两张图不能因为都带「图片」就算聊同一个话题 */))];
-  const terms = rawTerms(clean);
+  const terms = myTerms; // 与上面判「回她」共用同一套分词
   let overlap = 0;
-  for (const e of recent) {
+  // 只跟最近 5 条的共词算「主题接续」：旧话题的词留在 20 条窗口里，切了新话题还会一直加分。
+  // 5 条够接住群里的连问连答，又不让半小时前的旧词黏着新话题
+  for (const e of recent.slice(-5)) {
     const rt = rawTerms(String(e.text || ''));
     if (!rt.length || !terms.length) continue;
     const hit = rt.filter((k) => terms.includes(k));
@@ -322,7 +346,7 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
 
   // 梗图唯一的活路：群里正聊着相关话题——梗图和近期消息踩中同一个话题词（「好吃」对上「烧腊饭」），
   // 按话题延续给到仲裁线上让她自己看；冷发的杂图对不上任何近期话题，底分自然拦下
-  const cueHit = (clean.match(/(吃|喝|玩|看|做|去|走起|火锅|电影|游戏|剧情|饭|晚餐|午餐|唱|歌|聊|后面|这波|天气|热|冷|上班|下班|老板|摸鱼|放假|周末|累|困|烦|显卡|代码|bug|比赛|直播|买|钱|贵|穷)/i) || [])[0];
+  const cueHit = (clean.match(CUE_RE) || [])[0];
   if (memeImg && cueHit && recent.some((e) => new RegExp(cueHit, 'i').test(String(e.text || '')))) { score += T.continuation; reasons.push('梗图接着话题'); }
 
   const final = Math.max(0, Math.min(10, Number(score.toFixed(1))));
@@ -597,7 +621,7 @@ export async function learnReply(want, ok, info, peer = 'owner', at = 0) {
   const r = await llm.chatRaw([
     { role: 'system', content: `${persona()}\n\n${how}\n\n${llm.UNTRUSTED}` },
     ...history(owner.recentChat(8, Date.now(), peer)),
-    { role: 'user', content: `（这条不是他发的）刚才有人点你唱《${want}》，你应了要去学。现在${ok ? `下好了，下下来的是《${info}》，歌系统会自动发过去，跟在你这句话后面` : `没学成：${humanErr(info)}`}${mins ? `，离他点歌过了大概 ${mins} 分钟` : ''}。
+    { role: 'user', content: `（这条不是他发的）刚才有人点你唱《${want}》，你应了要去学。现在${ok ? `下好了，下下来的是《${info}》，歌系统会先发出去，你这句是歌到之后才说的——放心用「唱啦」这种语气` : `没学成：${humanErr(info)}`}${mins ? `，离他点歌过了大概 ${mins} 分钟` : ''}。
 接着你们刚才的话茬，想怎么说就怎么说，一两句就够${ok ? '' : '，原因讲成一句人话，别报错码'}。你只写要发的文字——歌是系统自动发的，别提「语音」也别写任何标记。别 markdown。${peer.startsWith('g:') ? '群里说，顺嘴接上谁点的就行，不用@谁。' : ''}` },
   ], { maxTokens: 150, temperature: 0.95, tag: 'qq', essential: true });
   return tidyReply(r.content);
