@@ -432,3 +432,46 @@ test('scanForAppointments：群友不叫昵称、只说「后面三天早上九�
   assert.equal(aps[0].days, 3, '连着3天落库');
   assert.equal(aps[0].who, '萌胶带', '记发言者（到点@他）');
 });
+
+test('叫停期间不发闹钟：pause 时 scanDueJobs 整拍跳过（连模型都不调），解除后 1 小时窗口内照常兑现（2026-11-18 号主裁决）', async () => {
+  llmQueue.length = 0; llmCalls.length = 0;
+  for (const t of readTasks().filter((x) => x.status === 'pending')) store.updateTask(t.id, { status: 'cancelled' });
+  appoint.addAppointment({ dueAt: Date.now() - 5 * 60_000, peer: 'owner', originText: '叫停期叫我起床', who: '号主' });
+  store.setPause({ reason: '打游戏', source: 'test' });
+  try {
+    await appoint.scanDueAppointments();
+    assert.equal(readTasks().find((t) => t.originText === '叫停期叫我起床').status, 'pending', '叫停期间不兑现');
+    assert.equal(llmCalls.length, 0, '模型都不调，一个 token 不烧');
+  } finally {
+    store.clearPause({ source: 'test' });
+  }
+  llmQueue.push({ content: '解除后补一句' });
+  await appoint.scanDueAppointments();
+  assert.equal(readTasks().find((t) => t.originText === '叫停期叫我起床').status, 'fired', '解除后窗口内（<1h）照常兑现');
+});
+
+test('风控冷却期间定时看视频：不看、任务标 failed 带风控原因、面板留记录、QQ 里跟号主说一声（2026-11-18 号主裁决）', async () => {
+  for (const t of readTasks().filter((x) => x.status === 'pending')) store.updateTask(t.id, { status: 'cancelled' });
+  store.writeState({ ...store.readState(), cooldownUntil: Date.now() + 3600_000 });
+  try {
+    appoint.addJob({ at: Date.now() - 60_000, kind: 'watch', peer: 'owner', sourcePeer: 'owner', originText: '风控期想看的视频', payload: { bvid: 'BV1xx411c7mD' }, who: '号主' });
+    await appoint.scanDueAppointments();
+    const j = readTasks().find((t) => t.originText === '风控期想看的视频');
+    assert.equal(j.status, 'failed', '没看成：标 failed 不卡队列');
+    assert.match(j.resultNote || '', /风控/, '备注写明是风控挡的');
+    assert.ok(readActions().some((a) => /风控冷却.*看视频|看视频.*风控冷却/.test(a.detail) || /风控冷却挡下/.test(a.detail)), '面板活动里有记录（QQ 说不上时这里兜底）');
+  } finally {
+    store.writeState({ ...store.readState(), cooldownUntil: null });
+  }
+});
+
+test('定时看视频给时辰会话让路：busy 时等、空闲即走、最多等到上限放行（上限 10 分钟 < 15 分钟 stale 重排窗，不会被误判崩了）', async () => {
+  let busyCount = 2; const slept = [];
+  await appoint.waitTurnForBili({ isBusy: () => busyCount-- > 0, sleep: async (ms) => { slept.push(ms); } });
+  assert.equal(slept.length, 2, 'busy 两次，等了两拍');
+  await appoint.waitTurnForBili({ isBusy: () => false, sleep: async () => { throw new Error('空闲就不该等'); } });
+  // 永远 busy：等满上限就放行（默认真 sleep 真耗时，isBusy 计拍数）
+  let n = 0;
+  await appoint.waitTurnForBili({ isBusy: () => { n++; return true; }, maxMs: 35, stepMs: 10 });
+  assert.ok(n >= 2 && n <= 6, `到上限放行而不是死等（实际等了 ${n} 拍）`);
+});

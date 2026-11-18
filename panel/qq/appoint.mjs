@@ -13,7 +13,7 @@
  *
  * 护栏：过期超 1 小时不发；识别挂低峰不挂每条消息；赴约次数不设上限；watch 仅号主。
  */
-import { readTasks, addTask, updateTask, localDate, nowIso, logAction, readConfig } from '../store.mjs';
+import { readTasks, addTask, updateTask, localDate, nowIso, logAction, readConfig, readPause, readState } from '../store.mjs';
 import * as llm from '../llm.mjs';
 import * as memory from '../memory.mjs';
 import { readChat, digestCandidates } from './owner.mjs';
@@ -138,6 +138,9 @@ export function checkPermission({ isOwner = false, sourcePeer = '', targetPeer =
 export async function scanDueJobs(now = Date.now()) {
   const cfg = readConfig();
   if (cfg.appoint?.enabled === false) return; // 开关默认开（不设或 true 都跑）
+  // 号主叫停了：不发闹钟不赴约（2026-11-18 号主裁决）——「先别吵」就是别主动开口。
+  // 窗口内的任务保持 pending，解除后 30 秒内照常补发；超 1 小时的自然错过（和时辰错过同一语义）
+  if (readPause(now)) return;
   // 崩在中途的「在看」任务：超过 15 分钟没结果就放回 pending，免得永远卡在执行中
   for (const t of readTasks()) {
     if (isJob(t) && t.status === 'in_progress' && t.kind === 'watch') {
@@ -224,12 +227,35 @@ async function doSay(j) {
 /** 看指定 B站 视频（仅号主建这种任务，建的地方已挡；这里再兜一层）
  *  走安静专用链路：只认真看这一条 + 拉字幕总结，不评论/分享、不碰日常排班的锁。
  *  看完自己发一条 QQ 汇报（去重在工具层按 bvid 做）——不再连环报「看错了/等下补」。 */
+/** 定时看视频前给时辰会话让路：B站 登录态和播放心跳是共享的，并发互踩。
+ *  最多等 10 分钟——刻意小于 15 分钟的 stale 重排窗（RUN_STALE_MS），等待中不会被误判「崩了」放回 pending。
+ *  等满上限还忙就并发看（watchAndSummarize 本来就是单视频轻量链路）。依赖可注入，测试用。 */
+export async function waitTurnForBili({ isBusy, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), maxMs = 10 * 60_000, stepMs = 10_000 } = {}) {
+  const auto = await import('../autopilot.mjs');
+  const busy = isBusy || (() => auto.liveStatus().running);
+  const t0 = Date.now();
+  while (busy() && Date.now() - t0 < maxMs) await sleep(stepMs);
+}
+
 async function doWatch(j) {
+  // 风控冷却期间不碰 B站（2026-11-18 号主裁决）：冷却中打接口只会加重风控。
+  // 不看 + 告知号主（QQ 说不上——比如他一小时没说话——也不挡，面板活动里有记录兜底）
+  const st = readState();
+  if (st.cooldownUntil && Date.now() < st.cooldownUntil) {
+    const until = new Date(st.cooldownUntil).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    try { logAction({ kind: 'appointment', source: 'auto', ok: false, detail: `⚠️ 风控冷却挡下了定时看视频「${(j.originText || j.jobPayload?.bvid || '').slice(0, 30)}」（冷却到 ${until}），没看`, target: j.id }); } catch { /* 日志不挡正事 */ }
+    try {
+      const { rawSend } = await import('../notify.mjs');
+      await rawSend(`⏳ 到点想看的视频没看成：B站 风控冷却中（到 ${until}），冷却完了想看再叫我一声`);
+    } catch { /* 号主最近没在 QQ 说话，机器人主动开口被 QQ 拦了；面板活动里已经留了记录 */ }
+    return { ok: false, note: `风控冷却中（到 ${until}），没看，QQ 里说了一声` };
+  }
   if (j.sourcePeer !== 'owner' && j.peer !== 'owner') {
     return { note: '看视频任务只对号主开放，跳过' };
   }
   const bvid = String(j.jobPayload?.bvid || '');
   if (!bvid) return { note: '没记下要看的视频号，跳过' };
+  await waitTurnForBili(); // 时辰会话在刷就先让路（共享登录态/心跳，并发互踩；最多 10 分钟）
   const auto = await import('../autopilot.mjs');
   const r = await auto.watchAndSummarize({ bvid, request: j.originText || j.jobPayload?.request || '' });
   if (r.ok) {

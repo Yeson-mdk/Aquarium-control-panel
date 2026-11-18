@@ -995,21 +995,25 @@ async function pageAutopilot(main) {
       <div class="cfg-sec">
         <h3>模型（可选）${llmNote}</h3>
         <p>任意 OpenAI 兼容接口，默认 DeepSeek 官方。Key 只存在本机 <code>panel/data/secrets.json</code>，不会进 git、也不会传回页面。</p>
-        <div class="sub-h">聊天模型（后台草稿、打分、日记都用它）</div>
-        <div class="cfg-grid">
-          <div><label class="f">接口地址</label><input data-path="llm.baseUrl" value="${esc(c.llm.baseUrl)}"></div>
-          <div><label class="f">模型名</label><input data-path="llm.model" list="modelList" value="${esc(c.llm.model)}" autocomplete="off"><datalist id="modelList"></datalist><div class="hint">DeepSeek 官方填 deepseek-chat；本地网关一般是「提供方/模型」</div></div>
-          <div><label class="f">API Key</label><input type="password" id="llmKey" placeholder="${ap.hasKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="new-password"></div>
+        <div class="cfg-box">
+          <div class="sub-h">聊天模型（后台草稿、打分、日记都用它）</div>
+          <div class="cfg-grid">
+            <div><label class="f">接口地址</label><input data-path="llm.baseUrl" value="${esc(c.llm.baseUrl)}"></div>
+            <div><label class="f">模型名</label><input data-path="llm.model" list="modelList" value="${esc(c.llm.model)}" autocomplete="off"><datalist id="modelList"></datalist><div class="hint">DeepSeek 官方填 deepseek-chat；本地网关一般是「提供方/模型」</div></div>
+            <div><label class="f">API Key</label><input type="password" id="llmKey" placeholder="${ap.hasKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="new-password"></div>
+          </div>
+          <div class="row"><button class="btn sm" id="llmModels">列出可用模型</button><button class="btn sm" id="llmTest">测试聊天模型</button><span class="small muted" id="llmMsg"></span></div>
         </div>
-        <div class="row" style="margin-top:10px"><button class="btn sm" id="llmModels">列出可用模型</button><button class="btn sm" id="llmTest">测试聊天模型</button><span class="small muted" id="llmMsg"></span></div>
-        <div class="sub-h">向量模型（记忆语义检索，选填）</div>
-        <div class="cfg-grid">
-          <div><label class="f">接口地址</label><input data-path="llm.embeddingBaseUrl" value="${esc(c.llm.embeddingBaseUrl || '')}" placeholder="留空 = 魔搭官方" autocomplete="off"><div class="hint">任意 OpenAI 兼容的 embedding 服务都行：留空走魔搭（<code>api-inference.modelscope.cn/v1</code>），或填硅基流动 <code>https://api.siliconflow.cn/v1</code>、百炼 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>、本地 Ollama <code>http://localhost:11434/v1</code> 等。<b>填基础地址就行</b>，带不带 <code>/embeddings</code> 都能认；DeepSeek 官方没有向量接口，别填它。</div></div>
-          <div><label class="f">模型 ID</label><input data-path="llm.embeddingModel" value="${esc(c.llm.embeddingModel || '')}" placeholder="留空 = 只用关键词" autocomplete="off"><div class="hint">embedding 模型的 ID，如魔搭 <code>Qwen/Qwen3-Embedding-0.6B</code>、硅基流动 <code>BAAI/bge-large-zh-v1.5</code>、百炼 <code>text-embedding-v3</code>。留空或填错都自动退回关键词，不影响聊天。</div></div>
-          <div><label class="f">向量接口密钥</label><input type="password" id="embeddingApiKey" placeholder="${ap.hasEmbedKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="new-password"><div class="hint">上面接口的 Key。留空 = 复用「QQ 连接」里的 ModelScope 令牌（走魔搭时用）。只存本机，不回传页面。</div></div>
+        <div class="cfg-box">
+          <div class="sub-h">向量模型（记忆语义检索，选填）</div>
+          <div class="cfg-grid">
+            <div><label class="f">接口地址</label><input data-path="llm.embeddingBaseUrl" value="${esc(c.llm.embeddingBaseUrl || '')}" placeholder="留空 = 魔搭官方" autocomplete="off"><div class="hint">任意 OpenAI 兼容的 embedding 服务都行：留空走魔搭（<code>api-inference.modelscope.cn/v1</code>），或填硅基流动 <code>https://api.siliconflow.cn/v1</code>、百炼 <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>、本地 Ollama <code>http://localhost:11434/v1</code> 等。<b>填基础地址就行</b>，带不带 <code>/embeddings</code> 都能认；DeepSeek 官方没有向量接口，别填它。</div></div>
+            <div><label class="f">模型 ID</label><input data-path="llm.embeddingModel" value="${esc(c.llm.embeddingModel || '')}" placeholder="留空 = 只用关键词" autocomplete="off"><div class="hint">embedding 模型的 ID，如魔搭 <code>Qwen/Qwen3-Embedding-0.6B</code>、硅基流动 <code>BAAI/bge-large-zh-v1.5</code>、百炼 <code>text-embedding-v3</code>。留空或填错都自动退回关键词，不影响聊天。</div></div>
+            <div><label class="f">向量接口密钥</label><input type="password" id="embeddingApiKey" placeholder="${ap.hasEmbedKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="new-password"><div class="hint">上面接口的 Key。留空 = 复用「QQ 连接」里的 ModelScope 令牌（走魔搭时用）。只存本机，不回传页面。</div></div>
+          </div>
+          <div class="row"><button class="btn sm" id="embedTest" title="真打一条向量，看接口、模型 ID 和密钥能不能用">测试向量模型</button><span class="small muted" id="embedMsg"></span><span class="small muted" style="margin-left:auto">实际请求：<code>${esc(ap.embeddingUrl)}</code></span></div>
+          <div class="hint">换模型或换接口后，去 NAS 跑一次 <code>node panel/backfill-vec.mjs</code> 给旧记忆重打向量（不同模型维度不一样，旧向量对不上；可反复跑、断点续传）。</div>
         </div>
-        <div class="row" style="margin-top:10px"><button class="btn sm" id="embedTest" title="真打一条向量，看接口、模型 ID 和密钥能不能用">测试向量模型</button><span class="small muted" id="embedMsg"></span><span class="small muted" style="margin-left:auto">实际请求：<code>${esc(ap.embeddingUrl)}</code></span></div>
-        <div class="hint" style="margin-top:8px">换模型或换接口后，去 NAS 跑一次 <code>node panel/backfill-vec.mjs</code> 给旧记忆重打向量（不同模型维度不一样，旧向量对不上；可反复跑、断点续传）。</div>
         <div class="sub-h">用量限制</div>
         <div class="cfg-grid">
           ${num('llm.dailyCalls', '后台每天最多调几次', { max: 5000, hint: '内心、评论区社交、自动评论算在里面；0 = 不限' })}
