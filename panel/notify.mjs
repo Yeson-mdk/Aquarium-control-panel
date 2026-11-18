@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readConfig, readSecrets, localDate, nowIso, logAction, DATA, readPause } from './store.mjs';
 import * as llm from './llm.mjs';
+import { oneSentence } from './llm.mjs';
 import * as qq from './qq/index.mjs';
 
 const DSH_CHANNELS = join(homedir(), '.dsh', 'dsh-im-connect', 'channels.json');
@@ -205,30 +206,55 @@ export async function notifyReview(r) {
  * 只受 QQ 的回复窗口约束 —— 窗口关了就排队，号主下次说话时 flushPending 补上。
  */
 export async function reportTask(task, { ok, note, watched = [] }) {
-  let text = null;
-  if (llm.llmReady()) {
+  // 默认发号主私聊；带 reportPeers 的任务（群里/好友派的点播）按会话分别发
+  const peers = (task.reportPeers && task.reportPeers.length) ? task.reportPeers : ['owner'];
+  return reportResultToPeers(task, { ok, note, watched }, peers);
+}
+
+/**
+ * 把一条结果分别汇报到多个会话（裁决：两会话派同一视频共用观看结果，但总结各发各的）。
+ * owner 走 rawSend（有窗口排队兜底），群/好友走 QQ 小号 sendText；每段独立 try/catch，一个会话发失败不连累其它。
+ */
+export async function reportResultToPeers(task, { ok, note, watched = [], raw = false }, peers = ['owner']) {
+  // raw=转发号主指定的原文（如「把刚才那条总结发到X群」）：不再让模型改写成「活干完了」的汇报口吻，
+  // 她自己写的总结原样发过去就行；普通任务汇报仍照旧让模型润色。
+  let text = raw ? String(note || '') : null;
+  if (!text && llm.llmReady()) {
     text = await llm.draftReport({ request: task.note || task.type, ok, note, watched }).catch(() => null);
   }
-  if (!text) text = composeTaskReport(task, { ok, note, watched });
-  try {
-    await rawSend(text, 'report');
-    const st = readState();
-    st.log = [...(st.log || []), { ts: nowIso(), ok: true, task: task.id, text: text.slice(0, 60) }].slice(-30);
-    writeState(st);
-    logAction({ kind: 'notify', source: 'auto', target: task.id, detail: `在 QQ 里汇报：${text.slice(0, 60)}` });
-    return { sent: true };
-  } catch (e) {
-    const st = readState();
-    if (e instanceof NotInWindow) {
-      st.pending = [...(st.pending || []), { task: task.id, text, ts: Date.now() }];
-      writeState(st);
-      return { sent: false, why: 'deferred' };
-    }
-    st.log = [...(st.log || []), { ts: nowIso(), ok: false, task: task.id, error: e.message }].slice(-30);
-    writeState(st);
-    logAction({ kind: 'notify', source: 'auto', ok: false, target: task.id, error: e.message, detail: '活干完了，但 QQ 汇报没发出去' });
-    return { sent: false, why: e.message };
+  if (!raw) {
+    // 号主要「仅一句话」：模型爱把想到的都说出来，发之前统一砍到第一句；超长就用兜底短句，别截半截
+    text = oneSentence(text, 80)
+      || oneSentence(composeTaskReport(task, { ok, note, watched }), 100)
+      || (ok ? '搞定啦' : '没做成 qwq');
   }
+  if (!text) text = composeTaskReport(task, { ok, note, watched });
+  const results = {};
+  for (const p of [...new Set(peers)]) {
+    const peer = p || 'owner';
+    try {
+      if (peer === 'owner') await rawSend(text, 'report');
+      else await qq.sendText(text, 'report', peer); // 群 g: / 好友 p: 走小号主动发，不受官方机器人窗口限制
+      results[peer] = { sent: true };
+      const st = readState();
+      st.log = [...(st.log || []), { ts: nowIso(), ok: true, task: task.id, text: text.slice(0, 60), peer }].slice(-30);
+      writeState(st);
+      logAction({ kind: 'notify', source: 'auto', target: task.id, detail: `在 QQ 里汇报（${peer}）：${text.slice(0, 60)}` });
+    } catch (e) {
+      const st = readState();
+      if (peer === 'owner' && e instanceof NotInWindow) {
+        st.pending = [...(st.pending || []), { task: task.id, text, ts: Date.now() }];
+        writeState(st);
+        results[peer] = { sent: false, why: 'deferred' };
+        continue;
+      }
+      st.log = [...(st.log || []), { ts: nowIso(), ok: false, task: task.id, error: e.message, peer }].slice(-30);
+      writeState(st);
+      logAction({ kind: 'notify', source: 'auto', ok: false, target: task.id, error: e.message, detail: `汇报到 ${peer} 没发出去` });
+      results[peer] = { sent: false, why: e.message };
+    }
+  }
+  return results;
 }
 
 /**
@@ -259,6 +285,17 @@ export async function impulse(text) {
   } catch (e) {
     return { sent: false, why: e.message };
   }
+}
+
+/**
+ * 点播看视频失败先静默；超过 PROGRESS_AFTER_MS 还没成、又没汇报过进度 → 主动说一句现状（只报一次）。
+ * 被催促时 brain 会把 failedAt 注入上下文当场回应，这条负责「时间太久」那一路。
+ */
+const PROGRESS_AFTER_MS = 15 * 60_000;
+export function scanStalledWatches(now = Date.now(), tasks = []) {
+  return tasks.filter((t) => (t.type === 'watch_video' || (t.type === 'job' && t.kind === 'watch'))
+    && t.status === 'failed' && t.failedAt
+    && t.progressReported !== true && now - Date.parse(t.failedAt) > PROGRESS_AFTER_MS);
 }
 
 function composeTaskReport(task, { ok, note, watched }) {

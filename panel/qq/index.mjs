@@ -162,6 +162,11 @@ async function onMessage(ev) {
   // @ 到她的按 groupAt 回；没 @ 的只有开了 groupFree 才送到她眼前，让她自己定要不要插嘴。只认号主时群消息整个不看。
   if (ev.message_type === 'group') {
     if (!pub) return;
+    // 顺手记群号（群名表用，跨会话执行要按名字翻 g:群号）；失败不挡收消息
+    try {
+      const groups = await import('../group-names.mjs');
+      groups.noteGroup('g:' + ev.group_id, { name: ev.group_name || '' });
+    } catch { /* 记不住不影响聊天 */ }
     const at = atMe(ev, bot?.state.selfId);
     let text = readMessage(ev);
     // @ 带图才看（跟私聊一样走「看图模型」）；开了插嘴就没@的图也看——她既然在旁边听大家聊，看不见图就接不上话。视频不看
@@ -481,8 +486,10 @@ function doLearn(t, peer) {
         || [`《${r.name}》学会啦，这就唱给你～`, `嗯，学好了，听听`, `《${r.name}》会了，唱啦`][Math.floor(Math.random() * 3)]; // 模型没回上就随手挑一句，别哑了也别老同一句
       await sendText(line, 'report', peer).catch(() => {});
       // 光说「学会了想听随时点」还得他再点一次，多余——直接唱（slow：整首歌不走发送链，别挡住后面的文字）
+      // 号主指定了别的会话（t.targetPeer）就唱到那边，否则在点的这个会话唱
       try {
-        await sendSeg([seg.record(brain.songB64(r.file))], `♪ ${r.name}`, 'song', peer, 180_000, true);
+        const to = t.targetPeer || peer;
+        await sendSeg([seg.record(brain.songB64(r.file))], `♪ ${r.name}`, 'song', to, 180_000, true);
       } catch (e) { console.error('[qq] 学完就唱', e.message); }
     })
     .catch(async (e) => {
@@ -560,6 +567,30 @@ async function sendSeg(message, logText, kind, peer = 'owner', timeoutMs, slow =
   };
   if (slow) return fire();
   return chainSend(peer, fire);
+}
+
+/** 跨会话发媒体（表情包/自拍/歌）到指定会话：后台 send_media 任务执行用。
+ *  stickerName 走表情包池、songFile 走曲库；返回 { ok, kind, name }。发不出去由调用方记失败。 */
+export async function sendMediaTo(peer, { kind = 'sticker', stickerName = '', songFile = '', songName = '', text = '', attribution = '' } = {}) {
+  if (!bot) throw new Error('QQ 小号没开');
+  // 从私聊发到群里的：群友得知道是谁叫发的（歌/图表里塞不下字，就先单独说一句）
+  const by = attribution ? `（${attribution}）` : '';
+  if (kind === 'text') {
+    if (!text) throw new Error('要发的话没写');
+    await sendText(`${by}${text}`, 'report', peer);
+    return { ok: true, kind: 'text' };
+  }
+  if (by) await sendText(by, 'report', peer);
+  if (kind === 'song') {
+    if (!songFile) throw new Error('歌曲文件没找到');
+    const b64 = brain.songB64(songFile);
+    await sendSeg([seg.record(b64)], `♪ ${songName || songFile}`, 'song', peer, 180_000, true);
+    return { ok: true, kind, name: songName || songFile };
+  }
+  if (!stickerName) throw new Error('表情包没找到');
+  const b64 = brain.stickerB64(stickerName);
+  await sendSeg([seg.image(b64)], stickerName, 'sticker', peer);
+  return { ok: true, kind: 'sticker', name: stickerName };
 }
 
 /** 给 notify.mjs：主动给号主发一句（汇报、提醒、分享） */

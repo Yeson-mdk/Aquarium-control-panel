@@ -168,7 +168,9 @@ async function runMorningPlan({ now = Date.now(), replan = false } = {}) {
   let parseFail = false;
   if (out) {
     try {
-      const obj = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1));
+      // 用容错解析：模型偶尔把 JSON 截在半个字段（2026-11-18 14:22 实测截成 {"slots":[{"key":"申","type）。
+      // 原生 JSON.parse 此时会报「Unexpected end of JSON input」；looseJson 按括号栈补齐，能救回完整的前几条。
+      const obj = llm.looseJson(out);
       for (const x of obj.slots || []) {
         const s = targets.find((t) => t.key === String(x.key || '').trim());
         if (!s) continue;

@@ -33,6 +33,26 @@ export class BiliError extends Error {
   }
 }
 
+// ─── 链接 → BV 号 ───────────────────────────────────────────
+// 号主发来的可能是 b23.tv 短链、bilibili.com/video/BVxxx 长链、或裸 BV 号。
+// 短链要跟随 302 跳到长链才能拿到 BV；拿不到就返回空串（让上层老实说没认出来，别瞎猜）。
+// fetchFn 可注入，方便测试不联网。
+const BV_RE = /BV[0-9A-Za-z]{10}/;
+export async function resolveBv(input, { fetchFn = fetch } = {}) {
+  const text = String(input || '');
+  const direct = text.match(BV_RE);
+  if (direct) return direct[0]; // 裸 BV / 长链里的 BV 直接认
+  const url = text.match(/https?:\/\/[^\s，,。；;）)]+/)?.[0];
+  if (!url || !/b23\.tv|bilibili\.com/i.test(url)) return '';
+  try {
+    const res = await fetchFn(url, { redirect: 'follow', headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
+    const final = String(res.url || '');
+    return final.match(BV_RE)?.[0] || '';
+  } catch {
+    return '';
+  }
+}
+
 // ─── 凭证 ──────────────────────────────────────────────────
 export function loadCookie() {
   if (!existsSync(COOKIE_FILE)) {

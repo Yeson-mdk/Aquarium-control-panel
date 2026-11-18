@@ -21,6 +21,7 @@ import * as owner from './owner.mjs';
 import * as meme from './meme.mjs'; // 号主教过的黑话：注入聊天，让她平常接得住梗
 import * as fav from '../fav.mjs';
 import * as friends from '../friends.mjs';
+import * as groups from '../group-names.mjs'; // 群号↔群名表：让她认得「鲸鲸群」是哪个群
 import { tuning } from './tuning.mjs';
 import {
   ROOT, readConfig, readReview, readTasks, addTask, updateTask, readState, readPause, setPause, clearPause,
@@ -115,7 +116,12 @@ export async function contextText(message = '', qq = readConfig().qq.ownerQQ, pe
   const m = mind.readMind();
   const pause = readPause();
   const pending = readReview().filter((r) => r.status === 'pending').length;
-  const busy = readTasks().filter((t) => t.report === 'qq' && (t.status === 'pending' || t.status === 'in_progress')).length;
+  const allTasks = readTasks();
+  const busy = allTasks.filter((t) => t.report === 'qq' && (t.status === 'pending' || t.status === 'in_progress')).length;
+  // 本会话点播失败、还静默着的视频：对方任何提及（链接/「看了吗」「怎么样」）就让她照实说进度
+  const stalledHere = allTasks.filter((t) => (t.type === 'watch_video' || (t.type === 'job' && t.kind === 'watch'))
+    && t.status === 'failed' && t.failedAt
+    && t.progressReported !== true && !(t.reportPeers || [t.peer || 'owner']).every((p) => p !== peer)).slice(-3);
   const isOwner = String(qq) === String(readConfig().qq.ownerQQ);
   const isGroup = String(peer).startsWith('g:');
   // 别人说话时按对话钥匙翻记忆（2.8）：她自己的事（B站生活）照旧全局可见，本群/本私聊的日结和
@@ -137,9 +143,21 @@ export async function contextText(message = '', qq = readConfig().qq.ownerQQ, pe
     `## 你今天自己的经历（刷 B站 这些是你自己的事，不是他的）\n${todayLife() || '（今天还没刷）'}`,
     past && `## 跟这句话有关、你想起来的\n${past}`,
     who,
+    // 群名表只在号主面前展开（群友不该看到号主有哪些群、叫什么）。她说「发到 X 群」「转发到 X 群」时照这个认目标。
+    isOwner && (() => {
+      const gl = groups.listGroups().filter((g) => g.name);
+      return gl.length ? `## 你知道的群（号主在面板填的名字，说「发到 X 群 / 转发到 X 群」就照这个认群号）
+${gl.map((g) => `- ${g.peer} = ${g.name}`).join('\n')}` : '';
+    })(),
     fav.favText(qq),
+    // 号主在群里说话：HOW 那份是「直接跟号主私聊」的口吻，不点破会把「私聊发给我」当成就地发/字面调侃。
+    // 悄悄告诉他这是号主本人（别在群里露称呼），他要说「私聊发给我/发我私聊」就是发到你们俩私聊窗口。
+    isGroup && isOwner && `## 悄悄说一句\n现在在群里说话的这个是号主本人——别在群里喊破他的身份、也别用你们私聊才用的称呼。他要是说「私聊发给我 / 发我私聊 / 私聊里发句话」，是让你把东西发到你俩的私聊窗口（工具 target 填「私聊」），不是就地发在群里、更不是让他自己过来。`,
     !isGroup && isOwner && friends.friendsText(),
     !isGroup && isOwner && [pause && `- 他叫停了你${pause.reason ? `（${pause.reason}）` : ''}，后台的活都停着`, pending && `- 有 ${pending} 条待审等他点头`, busy && `- 后台还有 ${busy} 件他交代的活在做`].filter(Boolean).join('\n'),
+    stalledHere.length && `## 你答应看却没看成的视频（对方要是提到，就照实说进度，别装没这回事）
+${stalledHere.map((t) => `- ${t.payload?.bvid || ''} ${String(t.note || '').slice(0, 30)}：${String(t.resultNote || '还没看成').slice(0, 60)}`).join('\n')}
+（对方问「看了吗/怎么样了」或又发了这条链接，就用你自己的话说明还没看成、原因是什么，说你记着、再发一次就重看；没提就别主动抖出来）`,
   ].filter(Boolean).join('\n\n');
 }
 
@@ -479,7 +497,8 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
         '\n\n（情绪想让动作被看见就用 send_sticker 发一张，别只在文字里比划；回完这句按「好感打分」的规矩照实把该缀的标记缀在句尾——有没有感触、几分，都照真实感受来，平平无奇就不缀。）'
     },
   ];
-  const out = { peerKey: peer, isOwner, name, imgs: imgs.slice(0, 3) }; // 这条消息里看过的图，留着让她看上就存成表情包；isOwner/name 让门禁和赴约认出「号主在群里说话」
+  // speakerQq=发言者 QQ：群友说「私聊发给我」时跨会话发送要发回他自己；号主私聊这条是 owner QQ，不用
+  const out = { peerKey: peer, isOwner, name, speakerQq: qq, imgs: imgs.slice(0, 3) }; // 这条消息里看过的图，留着让她看上就存成表情包；isOwner/name 让门禁和赴约认出「号主在群里说话」
   let cap = 600; // 撞输出上限（finish=length）会把半句话发出去、句尾的 [FAV] 也截掉：升一档再试一次
   for (let i = 0; i < 4; i++) {
     const r = await llm.chatRaw(msgs, { tools, maxTokens: cap, temperature: 0.85, tag: 'qq', essential: true, model });

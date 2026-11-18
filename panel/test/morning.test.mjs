@@ -95,6 +95,20 @@ test('3.1 模型胡说八道：整表回退默认 + 落一条日志（带原文�
   assert.equal(llmCalls.length, n, '失败过也不再调模型');
 });
 
+test('3.1b JSON 截在半个字段也能救回完整的时辰（2026-11-18 14:22 回归）', async () => {
+  seedSlots();
+  // 第一个时辰完整、第二个截在 goal 中途、后面全丢——老代码 JSON.parse 直接抛「Unexpected end of JSON input」
+  llmQueue.push({ content: '{"slots":[{"key":"辰","type":"browse","goal":"顺星轨看看"},{"key":"午","type":"res' });
+  const plan = await auto.morningPlan();
+  const chen = plan.find((s) => s.key === '辰');
+  assert.equal(chen.type, 'browse', '完整的前一条救回');
+  assert.equal(chen.goal, '顺星轨看看');
+  const wu = plan.find((s) => s.key === '午');
+  assert.ok(wu.type !== 'res', '截坏的半条不生效（res 不在白名单/或不完整）');
+  const acts = store.readActions().filter((a) => a.kind === 'plan' && a.ok === false);
+  assert.ok(!acts.some((a) => /Unexpected end of JSON/.test(a.error || '')), '不再弹晦涩的 JSON 解析错误');
+});
+
 test('3.2 重排：只动还没跑的时辰、跑过的照旧、每天最多 2 次', async () => {
   const slots = seedSlots();
   slots[0].status = 'done'; slots[0].type = 'browse';

@@ -1853,9 +1853,11 @@ async function pageReview(main) {
           <div class="seg queue-tabs" id="queueTabs" role="tablist">
             <button class="on" data-queue="tasks" role="tab" aria-selected="true">任务箱 <span class="badge" id="taskCount">0</span></button>
             <button data-queue="appointments" role="tab" aria-selected="false">约定 <span class="badge" id="apptCount">0</span></button>
+            <button data-queue="groups" role="tab" aria-selected="false">群名表</button>
           </div>
           <div class="queue-pane" id="taskPane"><div class="empty">加载中…</div></div>
           <div class="queue-pane" id="apptPane" hidden><div class="empty">加载中…</div></div>
+          <div class="queue-pane" id="groupPane" hidden><div class="empty">加载中…</div></div>
         </section>
       </aside>
     </div>`;
@@ -1869,8 +1871,30 @@ async function pageReview(main) {
     });
     $('#taskPane').hidden = which !== 'tasks';
     $('#apptPane').hidden = which !== 'appointments';
+    $('#groupPane').hidden = which !== 'groups';
+    if (which === 'groups') loadGroups();
   };
   $$('#queueTabs button').forEach((b) => (b.onclick = () => switchQueue(b.dataset.queue)));
+
+  // 群名表：群号收消息自动带出，群名号主手填（跨会话执行靠它把"去测试群"翻成 g:群号）
+  const loadGroups = async () => {
+    const { groups = [] } = await api('/api/group-names').catch(() => ({ groups: [] }));
+    $('#groupPane').innerHTML = groups.length
+      ? `<div class="small muted" style="margin-bottom:8px">群号是收到群消息时自动记下的；群名你来填，她才能听懂"去XX群"。</div>
+         <div class="tl queue-list">${groups.map((g) => `<div class="row" style="gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">
+           <code class="small">${esc(g.peer)}</code>
+           <input class="gname" data-peer="${esc(g.peer)}" value="${esc(g.name)}" placeholder="填群名…" maxlength="60" style="flex:1;min-width:0">
+           <button class="btn sm" data-save-group="${esc(g.peer)}">存</button>
+         </div>`).join('')}</div>`
+      : '<div class="empty">还没收到过群消息；群里 @ 她一次，群号就会自己出现在这里</div>';
+    $$('[data-save-group]').forEach((b) => (b.onclick = () => busy(b, async () => {
+      const peer = b.dataset.saveGroup;
+      const input = $(`.gname[data-peer="${CSS.escape(peer)}"]`);
+      await api('/api/group-names', { peer, name: input ? input.value : '' });
+      toast('群名存好了');
+      loadGroups();
+    })));
+  };
 
   const loadRv = async () => {
     const r = await api('/api/review');
@@ -1899,13 +1923,23 @@ async function pageReview(main) {
     });
   };
 
-  const taskRow = (t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">📋</div>
-      <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${ST[t.status]?.[1] || ''}">${ST[t.status]?.[0] || t.status}</span>${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.executor === 'bot' && t.source !== 'auto' ? '<span class="chip pink">QQ里的她</span>' : ''}${t.resultNote ? `<span class="queue-note">${esc(t.resultNote)}</span>` : ''}
+  const taskRow = (t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">${t.type === 'send_media' ? '📤' : '📋'}</div>
+      <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${ST[t.status]?.[1] || ''}">${ST[t.status]?.[0] || t.status}</span>${t.type === 'send_media' && t.payload?.targetPeer ? `<span class="chip blue">发到 ${esc(t.payload.targetPeer)}</span>` : ''}${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.executor === 'bot' && t.source !== 'auto' ? '<span class="chip pink">QQ里的她</span>' : ''}${t.resultNote ? `<span class="queue-note">${esc(t.resultNote)}</span>` : ''}
       ${t.status === 'pending' ? `<button class="btn sm ghost" data-cancel="${esc(t.id)}">取消</button>` : ''}</div></div></li>`;
+  const JOB_KIND = { say: ['💬', '说一句'], watch: ['📺', '看视频'], task: ['🛠️', '后台活'] };
   const apptRow = (a, fired = false) => {
-    const due = a.dueAt ? new Date(a.dueAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-    return `<li><div class="time">${fired ? hm(a.firedAt || a.ts) : due}</div><div class="ico">${fired ? '📮' : '📅'}</div>
-      <div class="body"><div class="x">${esc(a.originText || '')}</div><div class="m"><span class="chip ${fired ? 'green' : 'amber'}">${fired ? '已赴约' : '待赴约'}</span>${a.who ? `<span class="chip">${esc(a.who)}</span>` : ''}${a.peer && a.peer !== 'owner' ? `<span class="chip blue">${esc(a.peer)}</span>` : ''}${!fired && a.status === 'pending' ? `<button class="btn sm ghost" data-acancel="${esc(a.id)}">取消</button>` : ''}</div></div></li>`;
+    const at = a.at || a.dueAt;
+    const due = at ? new Date(at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const kind = a.kind || 'say';
+    const [ico, label] = JOB_KIND[kind] || JOB_KIND.say;
+    const body = a.originText || a.jobPayload?.taskNote || a.note || '';
+    const repeat = a.repeat === 'daily' ? `<span class="chip blue">${a.days >= 1 ? `连着 ${a.days} 天` : '每天'}</span>` : '';
+    const watching = !fired && a.status === 'in_progress';
+    const bvid = a.jobPayload?.bvid;
+    // 已执行看视频：把看的 BV 号和总结一并显示，不用再翻 QQ
+    const doneDetail = fired && bvid ? `<div class="m"><span class="chip">${esc(bvid)}</span>${a.resultNote ? `<span class="queue-note">${esc(a.resultNote)}</span>` : ''}</div>` : '';
+    return `<li><div class="time">${fired ? hm(a.firedAt || a.ts) : due}</div><div class="ico">${fired ? '✅' : watching ? '👀' : ico}</div>
+      <div class="body"><div class="x">${esc(body)}</div><div class="m"><span class="chip ${fired ? 'green' : watching ? 'blue' : 'amber'}">${fired ? '已执行' : watching ? '在看' : '待执行'}</span><span class="chip">${label}</span>${repeat}${a.who ? `<span class="chip">${esc(a.who)}</span>` : ''}${a.peer && a.peer !== 'owner' ? `<span class="chip blue">${esc(a.peer)}</span>` : ''}${!fired && a.status === 'pending' ? `<button class="btn sm ghost" data-acancel="${esc(a.id)}">取消</button>` : ''}</div>${doneDetail}</div></li>`;
   };
 
   const loadTasks = async () => {
@@ -1920,20 +1954,22 @@ async function pageReview(main) {
     $('#taskCount').textContent = String(pendingTasks.length);
     $('#apptCount').textContent = String(pendingAps.length);
     $('#taskStat').textContent = `任务 ${pendingTasks.length}`;
-    $('#queueStat').textContent = `${tasks.length} 条任务 · ${pendingAps.length} 条待赴约`;
+    $('#queueStat').textContent = `${tasks.length} 条任务 · ${pendingAps.length} 条待执行`;
 
     const open = tasks.slice(0, 8);
     const rest = tasks.slice(8);
     $('#taskPane').innerHTML = tasks.length ? `<ul class="tl queue-list">${open.map(taskRow).join('')}</ul>${rest.length ? `<details class="queue-more"><summary>还有 ${rest.length} 条</summary><ul class="tl queue-list">${rest.map(taskRow).join('')}</ul></details>` : ''}` : '<div class="empty">暂时没派的活</div>';
     $('#apptPane').innerHTML = (pendingAps.length || firedAps.length)
-      ? `${pendingAps.length ? `<div class="tl-day">待赴约</div><ul class="tl queue-list">${pendingAps.map((a) => apptRow(a)).join('')}</ul>` : ''}${firedAps.length ? `<div class="tl-day">已赴约</div><ul class="tl queue-list">${firedAps.map((a) => apptRow(a, true)).join('')}</ul>` : ''}`
-      : '<div class="empty">还没有约定</div>';
+      ? `${pendingAps.length ? `<div class="tl-day">待执行</div><ul class="tl queue-list">${pendingAps.map((a) => apptRow(a)).join('')}</ul>` : ''}${firedAps.length ? `<div class="tl-day">已执行</div><ul class="tl queue-list">${firedAps.map((a) => apptRow(a, true)).join('')}</ul>` : ''}`
+      : '<div class="empty">还没有定时任务</div>';
     switchQueue(queueTab);
     $$('[data-cancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks/cancel', { id: b.dataset.cancel }); loadTasks(); })));
     $$('[data-acancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/appointments/cancel', { id: b.dataset.acancel }); loadTasks(); })));
-    // 面板在做的活：隔几秒刷新一下进度
+    // 面板在做的活 + 约定栏正在看的视频：隔几秒刷新一下进度
     clearTimeout(S.taskTimer);
-    if (tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
+    const busy = tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')
+      || pendingAps.some((a) => a.status === 'in_progress');
+    if (busy) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
   };
 
   const executor = () => ($('#taskBot').checked ? 'bot' : 'panel');

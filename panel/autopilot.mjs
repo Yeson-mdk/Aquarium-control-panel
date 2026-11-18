@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
+import * as qq from './qq/index.mjs';
 import * as mind from './mind.mjs';
 import * as memory from './memory.mjs';
 import * as social from './social.mjs';
@@ -29,6 +30,9 @@ import {
 
 const TICK_MS = 30_000;
 const SRC = 'auto';
+// 跨会话发送任务：建了没人执行 / 执行到一半进程没了，都不能永远躺在任务箱
+const MEDIA_PENDING_MS = 2 * 60_000;  // 建了 2 分钟还没被认领＝执行器没接上
+const MEDIA_STALE_MS = 15 * 60_000;   // 执行中 15 分钟没结果＝卡死或进程重启（整首歌最长 180 秒，够宽）
 
 // ─── 待审：进队列的同时在 QQ 里叫号主一声 ─────────────────────
 function addReview(x) {
@@ -98,9 +102,12 @@ let timer = null;
 let wasPaused = false;
 let seenBotTaskAt = 0;
 
-/** 约定是到点定时任务，不算「号主又派了新活」，不参与时辰重排 */
+/** 定时任务（约定 appointment + 11-18 新 job 的 watch/task）都不算「号主又派了新活」，不参与时辰重排。
+ *  口径跟 qq/appoint.mjs 的 isJob 保持一致：type 是 appointment 或 job 都排除。
+ *  漏掉 job 会让「建一个看视频/交后台的定时任务」误触发 replan，下午平白重排一次还烧一次模型调用。 */
+const REPLAN_JOB_TYPES = new Set(['appointment', 'job']);
 export function isReplanBotTask(t) {
-  return t.type !== 'appointment' && t.executor === 'bot' && t.status === 'pending';
+  return !REPLAN_JOB_TYPES.has(t?.type) && t?.executor === 'bot' && t?.status === 'pending';
 }
 
 export function liveStatus() {
@@ -154,6 +161,33 @@ export function startScheduler() {
   console.log('[autopilot] 调度器已启动');
 }
 
+/**
+ * 找出没兑现的跨会话发送任务：send_media 建完就该立刻执行（tools.queueMedia 里），
+ * 但旧版本只建不跑、进程也可能在发送中途重启——这些僵尸得扫出来补送。
+ * pending 看建任务时间，in_progress 看 claimedAt（正在发整首歌的最多 180 秒，15 分钟才算卡死）。
+ */
+export function scanOrphanMedia(now = Date.now(), tasks = readTasks()) {
+  return tasks.filter((t) => {
+    if (t.type !== 'send_media' || ['done', 'failed', 'cancelled'].includes(t.status)) return false;
+    const since = Date.parse(t.status === 'in_progress' ? (t.claimedAt || t.ts || 0) : (t.ts || 0));
+    if (!Number.isFinite(since)) return false;
+    return now - since > (t.status === 'in_progress' ? MEDIA_STALE_MS : MEDIA_PENDING_MS);
+  });
+}
+
+/** 把扫出来的僵尸发送任务重新交给执行器；小号没连上就先等着，别把任务直接判死。 */
+export function retryOrphanMedia(now = Date.now(), tasks = readTasks(), { ready = () => qq.connected(), run = runTask } = {}) {
+  const orphans = scanOrphanMedia(now, tasks);
+  if (!orphans.length || !ready()) return [];
+  for (const t of orphans) {
+    updateTask(t.id, { status: 'pending', claimedAt: null, retryAt: nowIso() });
+    logAction({ kind: 'qq', source: SRC, target: t.id, ok: false,
+      detail: `📤 跨会话发送卡在${t.status === 'in_progress' ? '执行中' : '排队'}，重新送一次：${String(t.note || t.type).slice(0, 40)}` });
+    run({ ...t, status: 'pending' }).catch((e) => updateTask(t.id, { status: 'failed', resultNote: e.message }));
+  }
+  return orphans;
+}
+
 async function tick() {
   const now = Date.now();
   const gap = now - lastTick;
@@ -163,6 +197,16 @@ async function tick() {
   notify.flushPending(readReview).catch(() => {});
   // 约定赴约：扫到期约定，到点主动开口（不受自动养号开关影响，照 flushPending 范式）
   import('./qq/appoint.mjs').then((m) => m.scanDueAppointments(now)).catch((e) => console.error('[autopilot] 约定赴约', e.message));
+  // 点播视频失败静默 15 分钟后还没人问 → 主动汇报一次进度（只报一次；被催促则由 brain 当场回应）
+  for (const t of notify.scanStalledWatches(now, readTasks())) {
+    updateTask(t.id, { progressReported: true }); // 先打标，避免 tick 重入重复报
+    notify.reportTask(t, {
+      ok: false,
+      note: `之前那条视频没看成（${String(t.resultNote || '接口没回').slice(0, 60)}），我先记着，你再发一次我就重看`,
+    }).catch(() => {});
+  }
+  // 跨会话发媒体：建了没执行 / 发到一半进程没了的，自动补送一次
+  retryOrphanMedia(now, readTasks());
   if (!live.running) mind.maybeReflect().catch(() => {});
   // 号主叫停了：叫停前就在刷的这一轮也停下（叫停之后他自己点的、派的照做）
   const pause = readPause(now);
@@ -800,6 +844,57 @@ function summarize(s, aborted) {
   return (aborted ? '被叫停：' : '') + parts.join('，');
 }
 
+/**
+ * 安静地看一个「指定」视频并产出一条内容总结 —— 阶段三.5 视频任务专用链路。
+ *
+ * 跟日常刷视频（runSession）彻底分开：只做「打开 → 真看一遍心跳 → 拉字幕/简介/热评 → 写一条总结」，
+ * 不评论、不接话、不分享、不 impulse、不 notifyReview，也**不碰 live.running 那把锁**——
+ * 所以既不会把号主点的视频换成随手挑的，也不会跟她自己的排班互相挤。
+ * 看完用一条 reportTask 回报（去重在工具层按 bvid 做），不再连环报「看错了/等下补」。
+ * deps 可注入，测试不用联网。
+ */
+export async function watchAndSummarize({ bvid, request = '', deps = {} } = {}) {
+  const B = deps.bili || bili;
+  const chat = deps.chat || llm.chat;
+  const key = String(bvid || '').trim();
+  if (!/^BV[0-9A-Za-z]{10}$/.test(key)) return { ok: false, title: '', summary: '视频号没认出来，看不了', bvid: key, watched: [] };
+  let v;
+  try {
+    v = await B.browseVideo(key);
+  } catch (e) {
+    return { ok: false, title: '', summary: `这个视频打不开：${e.message}`, bvid: key, watched: [] };
+  }
+  // 真看一遍（播放心跳），但不产生任何社交动作；看不成也别挡着总结
+  try { await (deps.watchVideo || B.watchVideo)(key); } catch { /* 心跳失败不影响总结 */ }
+  // 字幕拉不到就用简介 + 热评兜底，不中断
+  let subtitleText = '';
+  try {
+    const sub = await B.videoSubtitle(key, v.cid);
+    if (sub?.lines?.length) subtitleText = sub.lines.slice(0, 80).map((x) => x.text).join(' ').slice(0, 3000);
+  } catch { /* 没字幕不等于没内容 */ }
+  const hot = (v.comments || []).slice(0, 3).map((c) => c.text).filter(Boolean).join('；');
+  const material = [
+    `标题：${v.title || ''}`,
+    v.owner ? `UP主：${v.owner}` : '',
+    v.desc ? `简介：${String(v.desc).slice(0, 300)}` : '',
+    subtitleText ? `字幕（节选）：${subtitleText}` : '',
+    hot ? `热评：${hot}` : '',
+  ].filter(Boolean).join('\n');
+  const ask = request ? `号主想让你看的是：${request}\n` : '';
+  let summary = '';
+  try {
+    summary = String(await chat([
+      { role: 'system', content: `${llm.PERSONA}\n号主发来一个视频让你看了跟他说说。用你自己的口吻，1~3 句、不超过 120 字，说清这视频讲了什么、你觉得有意思的点。只根据下面的资料说，资料没提的别编，别说你看到了画面——你只知道标题、简介、字幕和评论。` },
+      { role: 'user', content: `${ask}资料：\n${material}\n\n只输出要发给号主的话。` },
+    ], { maxTokens: 300, tag: 'task', essential: true })).trim();
+  } catch { /* 模型没回话就走兜底 */ }
+  if (!summary) summary = `《${v.title || key}》我看了，${v.desc ? String(v.desc).slice(0, 60) : '大致讲的我记下了'}`;
+  return {
+    ok: true, title: v.title || key, summary: summary.slice(0, 200), bvid: key,
+    watched: [{ title: v.title || key, bvid: key, owner: v.owner || '' }],
+  };
+}
+
 // ─── 评论：AI 起草 → 待审 / 直接发；或交给 QQ 里的她 ───────
 function commentsToday() {
   const today = localDate();
@@ -998,24 +1093,49 @@ async function inboxNow() {
   return `看了 ${todo.length} 条新回复/@，起草了 ${n} 条回复，在「待审」里${tail}`;
 }
 
-export async function runTask(task) {
+export async function runTask(task, deps = {}) {
   updateTask(task.id, { status: 'in_progress', claimedAt: nowIso(), executor: 'panel' });
   let plan = null;
   let watched = [];
+  // 看号主点的视频、跨会话发媒体都走专用安静链路，不碰 live.running 那把锁，也就不跟日常排班互相挤
+  const isWatching = task.type === 'watch_video';
+  const isMedia = task.type === 'send_media';
   // QQ 里的她交给后台的活：做完（或没做成）都让她在 QQ 里说一声
   const report = (ok, note) => {
     if (task.report !== 'qq') return;
     notify.reportTask(task, { ok, note, watched }).catch(() => {});
   };
   try {
-    if (live.running) {
+    // 其它派活照旧等她这轮刷完（同一把锁串着来，免得两路 B站 请求撞风控）
+    const running = deps.isRunning ? deps.isRunning() : live.running;
+    if (!isWatching && !isMedia && running) {
       updateTask(task.id, { resultNote: '她正在刷，这轮完了就去' });
-      while (live.running) await bili.sleep(10_000);
+      while (deps.isRunning ? deps.isRunning() : live.running) await bili.sleep(10_000);
     }
     let note;
     let ok = true;
-    if (task.type === 'diary') note = await diaryNow();
+    if (isWatching) {
+      const r = deps.watchAndSummarize
+        ? await deps.watchAndSummarize({ bvid: task.payload?.bvid, request: task.payload?.request || task.note || '' })
+        : await watchAndSummarize({
+          bvid: task.payload?.bvid,
+          request: task.payload?.request || task.note || '',
+        });
+      ok = r.ok;
+      note = r.summary;
+      watched = r.watched || [];
+    }
+    else if (task.type === 'diary') note = await diaryNow();
     else if (task.type === 'check') note = await inboxNow();
+    else if (isMedia) {
+      const p = task.payload || {};
+      const r = deps.sendMediaTo
+        ? await deps.sendMediaTo(p.targetPeer, p)
+        : await (await import('./qq/index.mjs')).sendMediaTo(p.targetPeer, p);
+      note = `已把${p.kind === 'song' ? `歌《${p.songName || ''}》` : p.kind === 'text' ? '话' : '表情包'}发到 ${p.targetPeer}`;
+      logAction({ kind: 'qq', source: SRC, target: p.targetPeer, detail: `📤 跨会话发媒体：${note}` });
+      ok = r?.ok !== false;
+    }
     else {
       plan = PRESETS[task.type]?.() || (await llm.parseTask(task.note));
       const short = (task.note || task.type).slice(0, 20);
@@ -1024,12 +1144,19 @@ export async function runTask(task) {
       note = r.summary;
       watched = r.watched || [];
     }
-    updateTask(task.id, { status: ok ? 'done' : 'failed', doneAt: nowIso(), resultNote: note, plan });
+    // 看号主点的视频失败先静默：只记 failedAt，等超时扫描或被催促时再汇报进度（裁决：别一句话就把失败甩过去）
+    updateTask(task.id, {
+      status: ok ? 'done' : 'failed', doneAt: nowIso(), resultNote: note, plan, watched,
+      ...(isWatching && !ok ? { failedAt: nowIso(), progressReported: false } : {}),
+    });
     logAction({ kind: ok ? 'task_done' : 'error', source: SRC, ok, target: task.type, detail: `派的活：${task.note || task.type} → ${note}` });
-    report(ok, note);
+    if (!isWatching || ok) report(ok, note); // 点播失败不立即报，静默
   } catch (e) {
-    updateTask(task.id, { status: 'failed', doneAt: nowIso(), resultNote: e.message, plan });
+    updateTask(task.id, {
+      status: 'failed', doneAt: nowIso(), resultNote: e.message, plan,
+      ...(isWatching ? { failedAt: nowIso(), progressReported: false } : {}),
+    });
     logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: `派的活没做成：${task.note || task.type}` });
-    report(false, e.message);
+    if (!isWatching) report(false, e.message);
   }
 }

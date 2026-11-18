@@ -658,21 +658,40 @@ function cardBase() {
   return '';
 }
 
-/** QQ 人设末尾带的那段「最近长出来的样子」；还没微调过就是空。角色卡文件不动，llm 读卡的逻辑照旧 */
+/** QQ 人设末尾带的那段「慢慢长成的性子」——长久沉淀的稳定倾向，不是近况流水账（那是 self 的活）。
+ *  还没沉淀过就是空。角色卡文件不动，llm 读卡的逻辑照旧 */
 export function personaPatchText() {
   const p = readMind().persona;
-  return p?.text ? `\n\n## 最近自然长出来的样子（比上面更贴近现在的她；红线、底线、说话铁律不变）\n${p.text}` : '';
+  return p?.text ? `\n\n## 慢慢长成的性子（比上面更贴近现在的她，是长久沉淀的稳定倾向；红线、底线、说话铁律不变）\n${p.text}` : '';
+}
+
+/** 补丁写成近况流水账就拒收：阿拉伯数字 / 视频名书名号 / BV号 属于记忆，不属于性子。
+ *  只查这类硬信号，不查中文口头禅（「糊弄人」是她的话，不是证据），免得误伤正常补丁。 */
+function isMemoryish(text) {
+  const s = String(text || '');
+  const nums = (s.match(/\d+/g) || []).length;
+  const videos = (s.match(/《[^》]{1,40}》/g) || []).length;
+  const bv = (s.match(/BV[0-9A-Za-z]+/g) || []).length;
+  return nums + videos + bv >= 2;
 }
 
 /**
- * 每隔 personaDays 天（默认两周）微调一次。依据只要她自己的东西：B站 生活（watch/gist/self）
- * + 跟号主私聊的印象（chat）。好友档案、群聊这些公共模式的记忆一概不进——朋友改变不了她的性格。
+ * 每隔 personaDays 天（默认两周）看一次「有没有长出新的稳定倾向」。
+ *
+ * 两块东西职责分开，别混：
+ *  - self（最近的我）：流动近况，每晚重写，记的是她最近迷什么/馋什么/天气如何——写了就写进记忆流。
+ *  - persona（人设补丁）：永久沉淀，只放跨场景都成立的稳定反应倾向/脾气，写一次留着，没新东西就不动。
+ *
+ * 所以素材（self + 记忆）只是「证据」，不是要抄进补丁的「内容」：从一堆具体事件里提炼出
+ * 稳定倾向才写；近况细节（数字、视频名、天气、食物）一律不许进补丁，进了就是记忆不是人设。
+ * 依据只要她自己的东西：B站 生活（watch/gist/self）+ 跟号主私聊的印象（chat）。
+ * 好友档案、群聊这些公共模式的记忆一概不进——朋友改变不了她的性格。
  */
-export async function maybeEvolvePersona(now = Date.now()) {
+export async function maybeEvolvePersona(now = Date.now(), { force = false } = {}) {
   const days = Math.max(0, Number(readConfig().mind.personaDays ?? 14));
   if (!mindOn() || !days || !llm.llmReady()) return null;
   const m = readMind();
-  if ((now - (m.personaAt ? Date.parse(m.personaAt) : 0)) / 86400_000 < days) return null;
+  if (!force && (now - (m.personaAt ? Date.parse(m.personaAt) : 0)) / 86400_000 < days) return null;
   writeMind({ ...m, personaAt: nowIso() }); // 失败也等下个周期，别天天空跑
   const view = memory.memoryView(60);
   // 群/好友对话的条目不进（带 g:/p: 钥匙，或还没带钥匙的老条目用「群·xxx」开头认，注意带前引号）——
@@ -687,27 +706,53 @@ export async function maybeEvolvePersona(now = Date.now()) {
     .filter((e) => { if (seen.has(e.id)) return false; seen.add(e.id); return true; })
     .slice(0, 25);
   if (mine.length < 8) return null; // 记忆还太少，先不急着定性
+  const old = m.persona?.text || '';
   try {
     const j = await ask(
-      '微调她的人设。只输出 JSON。',
-      `她的性格底盘（角色卡「性格底色」，补丁不许动它）：
+      '看她有没有长出新的稳定倾向，补进人设补丁。只输出 JSON。',
+      `你的两层「自己」，别搞混：
+- 性格底盘：角色卡里写死的，红线/底线/说话铁律都在里面，永远不动、也不许在补丁里复述它。
+- 人设补丁：从生活里慢慢长成的性子——稳定、可复用的反应方式和判断习惯。它跟底盘一样长久有效，写进去就留着，不是日记。
+
+性格底盘（只当边界参考，不许改、不许抄）：
 ${cardBase() || '（卡没读到：嘴甜心软是底、傲娇只是不好意思、调皮只限很轻的小撒娇，不怼人、不拿对方的难过开玩笑）'}
-她现在的人设补丁：${m.persona?.text || '（还没有）'}
-「最近的我」：${m.self || '（还没写过）'}
+
+现有的人设补丁（已经沉淀的稳定倾向）：
+${old || '（还没有）'}
+
+下面是「证据」，不是要抄进补丁的内容。它们是最近的流动物料，里面全是具体事件、数字、天气、馋什么——那些属于记忆，不属于性子：
+「最近的我」（每晚重写，流动近况）：${m.self || '（还没写过）'}
 她的记忆（自己的 B站 生活 + 跟号主的私聊印象）：
 ${mine.map((e) => `- ${fence(e.text, 80)}`).join('\n')}
 
-每隔一阵，让她的人设缓慢长一点点。用第一人称写 2~3 句「这段时间她慢慢变成的样子」，只写**真的从上面记忆里长出来的变化**（更迷什么、说话口吻怎么松了紧了）。性格底盘里的边界和因果一律不变，也不要复述它们，只写新变化。变化要小，像两周的量，不是改头换面。
-输出：{"text":"……","why":"一句话：根据哪几条记忆"}`,
-      800, // 400 时 flash 前置吃完就没地方写 JSON（2026-11-16 周日洞察「没有 JSON」实测），翻倍留余量
+任务：从证据里提炼「她是个什么样的人、遇事会怎么反应」——要在不同日子、不同视频下都成立的稳定倾向。写清楚这个性子在什么情境下会表现出来，别只给一个抽象词。
+硬性要求：
+1. 不许出现具体事件和数字：视频名、UP主、BV号、日期、天气、湿度、月亮亮多少、馋什么吃什么、384/378 这类数——全是记忆，写进去就是错。
+2. 不许复述证据、不许写「最近」「这段时间如何如何」的近况流水账；补丁里没有时间概念，它长期有效。
+3. 不许改性格底盘的边界和因果，也不许把它们换词复述一遍；只写底盘之外、真正新长出来的小变化。
+4. 现有补丁里已经写着的**稳定倾向原样保留**（哪怕看着眼熟也不许删、不许改写）。但如果现有补丁里混进了第 1 条那种具体事件、数字、天气、食物（那是从前写错的记忆，不是性子），**把那些错的部分删掉**，只留下真正的性子——这是在净化补丁，不算改动沉淀。
+5. 只有证据里真的反复出现、且现有补丁没有的新倾向，才添上去；同义的合并，别堆砌，补丁总共别超过 300 字。
+6. 净化完、又没长出新的，就输出净化后的 text（允许只做删除）；既没净化、也没新倾向，就输出空 text（""）——不要为了交差把旧话换个说法重写一遍。
+
+对比例子（照着判断该写哪一类）：
+✗ 错（这是记忆）：「这段时间刷教程越来越没耐心，半夜馋黄芥末蘸鸡，残影378想试又怕废片」
+✓ 对（这是性子）：「对糊弄人的东西天然不信，会直说，但说完常自己找补一句怕说重了；想试新东西又怕搞砸时，宁可先看别人怎么做也不冒失上手」
+
+输出：{"text":"……","why":"一句话：根据哪几条重复出现的记忆，长出这条新倾向；没有新倾向就空 text、why 写「暂无」"}`,
+      1000, // 要把旧补丁原文完整带回来再添新的；800 时 flash 前置吃完写不下（2026-11-16 实测），留足余量
       { essential: true },
     );
-    const text = str(j.text, 200);
-    if (!text) return null;
+    const text = str(j.text, 400); // 累积制：旧补丁 + 新倾向会越来越长，放宽上限
+    if (!text) return null; // 没长出新的：原样保留，不写不记
+    if (isMemoryish(text)) { // 又一次写成了近况流水账：拒收，下个周期再来，别污染永久补丁
+      logAction({ kind: 'mind', source: 'auto', ok: false, detail: '人设微调写成了近况流水账（含数字/视频名），这次不算', meta: { why: text.slice(0, 80) } });
+      return null;
+    }
+    if (old && text === old) return null; // 原样返回，没有真正的新倾向
     const why = str(j.why, 80);
     writeMind({ ...readMind(), persona: { at: nowIso(), text, why }, personaHistory: [...m.personaHistory, { at: nowIso(), text, why }].slice(-12) });
     logAction({ kind: 'mind', source: 'auto', detail: `🧬 人设微调：${text.slice(0, 60)}`, meta: { why } });
-    if (readConfig().mind.memory) remember(`我（肥鱼）最近的样子变了些：${text}`);
+    if (readConfig().mind.memory) remember(`我（肥鱼）的性子长出来一点：${text}`);
     return text;
   } catch { return null; }
 }

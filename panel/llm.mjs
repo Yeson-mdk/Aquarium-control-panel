@@ -425,6 +425,19 @@ ${self?.mood ? `\n你现在的心情：${fence(self.mood, 20)}` : ''}${self?.sel
 }
 
 /**
+ * 汇报只留一句：模型容易把过程、想法、补充全倒出来，发之前砍到第一句。
+ * 长到一句都说不完的，宁可丢给调用方走兜底短句，也不截成半截。
+ */
+export function oneSentence(text, max = 80) {
+  let s = String(text || '').split('\n')[0].replace(/\s+/g, ' ').trim(); // 先cut行，别把换行压成空格后连成一句
+  if (!s) return '';
+  s = s.replace(/^["'“‘「『]+|["'”’」』]+$/g, '');
+  const m = s.match(/^[^。！？!?；;\n]+[。！？!?]?/);
+  const one = (m ? m[0] : s).trim();
+  return one.length <= max ? one : '';
+}
+
+/**
  * 号主在 QQ 里交代的活做完了，用她的口吻跟号主汇报一句（私聊，不是公开内容）。
  * 只给标题，没给内容，所以不许编视频里讲了什么。
  */
@@ -438,13 +451,12 @@ export async function draftReport({ request, ok, note, watched = [] }) {
         content: `号主之前让你去做：${request}
 ${ok ? '你做完了' : '你没做成'}，结果：${note}
 ${list ? `看过的视频：\n${list}\n可以挑一个随口提一句，但你只知道标题，不要编视频里讲了什么。` : '这次没有看过的视频，不要提任何视频标题。'}
-用聊天的口吻跟号主汇报一下，1~3 句，不超过 100 字。没做成就直说原因，别甩锅。只输出要发的话。`,
+用聊天的口吻跟号主汇报，**就一句话**：别分点、别换行、别把怎么想的/过程/补充都倒出来，一句话说完，不超过 60 字。没做成就直说原因，别甩锅。只输出这一句。`,
       },
     ],
     { maxTokens: 300, tag: 'task', essential: true },
   );
-  const t = out.trim();
-  return t && t.length <= 200 ? t : null;
+  return oneSentence(out, 80) || null;
 }
 
 /** 测一下连通性 */

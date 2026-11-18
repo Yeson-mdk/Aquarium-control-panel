@@ -30,6 +30,7 @@ import * as social from './social.mjs';
 import * as sky from './sky.mjs';
 import * as health from './health.mjs';
 import * as qq from './qq/index.mjs';
+import * as groups from './group-names.mjs';
 import * as owner from './qq/owner.mjs';
 import { openAsHer } from './browser.mjs';
 import {
@@ -189,7 +190,7 @@ const routes = {
       account, exp, unread,
       today: todayCounts(),
       series: dailySeries(14),
-      tasksPending: readTasks().filter((t) => t.status === 'pending' && t.type !== 'appointment').length,
+      tasksPending: readTasks().filter((t) => t.status === 'pending' && t.type !== 'appointment' && t.type !== 'job').length,
       reviewPending: readReview().filter((r) => r.status === 'pending').length,
       autopilot: autopilotView(),
       health: health.status(),
@@ -257,7 +258,7 @@ const routes = {
   },
 
   // 任务箱
-  'GET /api/tasks': async () => ({ tasks: readTasks().filter((t) => t.type !== 'appointment').slice(0, 80) }),
+  'GET /api/tasks': async () => ({ tasks: readTasks().filter((t) => t.type !== 'appointment' && t.type !== 'job').slice(0, 80) }),
   'POST /api/tasks': async (_q, b) => {
     const map = {
       browse: '随便刷刷B站，看到有意思的点个赞、写两句感想',
@@ -588,6 +589,12 @@ const routes = {
     return openAsHer(`https://www.bilibili.com/video/${b.bvid}`);
   },
 
+  // 群号↔群名表（跨会话执行用：群号收消息自动带出，群名号主手填）
+  'GET /api/group-names': async () => ({ groups: groups.listGroups() }),
+  'POST /api/group-names': async (_q, b) => {
+    if (!groups.setGroupName(String(b.peer || ''), String(b.name || ''))) throw new Error('群号不对，或这条群还没收到过消息');
+    return { groups: groups.listGroups() };
+  },
   // 她的内心
   'GET /api/mind': async () => mind.dayViewWithSky(),
   // 她的记忆流：记错了的可以删

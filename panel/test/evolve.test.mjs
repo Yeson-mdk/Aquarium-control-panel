@@ -36,8 +36,13 @@ test('人设微调：到了周期跑一次，产出拼进 QQ 人设；周期内�
   llmQueue.push({ content: JSON.stringify({ text: '最近迷上天文迷得不行，说话比以前更爱打比方了。', why: '好几条天文相关的记忆' }) });
   const t = await mind.maybeEvolvePersona();
   assert.match(t, /天文/);
-  assert.match(mind.personaPatchText(), /最近自然长出来的样子/);
+  assert.match(mind.personaPatchText(), /慢慢长成的性子/);
   assert.match(mind.personaPatchText(), /天文/);
+  // 职责分层写进了 prompt：近况是证据不是内容、旧补丁原样保留、没新的就空
+  const sent = JSON.stringify(llmCalls.at(-1));
+  assert.match(sent, /证据.*不是要抄进补丁的内容|不是要抄进补丁/);
+  assert.match(sent, /原样保留/);
+  assert.match(sent, /输出空 text/);
   assert.equal(mind.readMind().personaHistory.length, 1, '留了底');
   // 周期内再调：直接返回，不调模型
   const n = llmQueue.length;
@@ -77,4 +82,49 @@ test('人设微调：群聊/好友对话的记忆不进（朋友改变不了她�
   const sent = JSON.stringify(llmCalls.at(-1));
   assert.match(sent, /天文观测/, 'B站 记忆在提示词里');
   assert.ok(!/吵架|失恋|老格式/.test(sent), '带 g:/p: 钥匙的和「群·」开头的都没进');
+});
+
+test('人设补丁：写成了近况流水账（带数字/天气/吃的）就拒收，不污染永久补丁', async () => {
+  const { writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { DATA } = await import('./_env.mjs');
+  // 清掉上次的时间戳，模拟又到周期（前面用例已攒够记忆）；沿用「先记时间再干活」口径
+  writeFileSync(join(DATA, 'mind.json'), JSON.stringify({ ...mind.readMind(), personaAt: null }));
+  const before = mind.readMind().personaHistory.length;
+  // 模型又把近况抄进来了：湿度、数字、BV、想吃的——全是记忆，不是性子
+  llmQueue.push({ content: JSON.stringify({
+    text: '今晚广州阴着湿度74%，上弦月才亮51%，残影378还是想试，半夜馋黄芥末蘸鸡',
+    why: '最近的记忆',
+  }) });
+  const t = await mind.maybeEvolvePersona();
+  assert.equal(t, null, '流水账被拒收');
+  assert.equal(mind.readMind().personaHistory.length, before, '没留底、没污染补丁');
+});
+
+test('人设补丁：净化旧补丁里的近况 + 没长出新的（空 text）都不乱写', async () => {
+  const { writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { DATA } = await import('./_env.mjs');
+  const file = join(DATA, 'mind.json');
+  // 场景一：旧补丁混着数字近况，模型这次净化了（只删不添）→ 应该落库
+  writeFileSync(file, JSON.stringify({ ...mind.readMind(), personaAt: null,
+    persona: { at: new Date().toISOString(), text: '她嘴甜心软，残影378记着，馋黄芥末蘸鸡', why: '旧' } }));
+  llmQueue.push({ content: JSON.stringify({ text: '她嘴甜心软，遇事先替别人想一步', why: '净化掉旧补丁里的数字和吃的' }) });
+  const t = await mind.maybeEvolvePersona();
+  assert.equal(t, '她嘴甜心软，遇事先替别人想一步', '净化后的干净补丁落库');
+  assert.ok(!/\d|蘸鸡/.test(mind.readMind().persona.text), '旧补丁里的近况成分被清掉了');
+
+  // 场景二：没长出新的，模型输出空 → 补丁原样不动、不留底
+  writeFileSync(file, JSON.stringify({ ...mind.readMind(), personaAt: null }));
+  const before = mind.readMind().personaHistory.length;
+  const keep = mind.readMind().persona.text;
+  llmQueue.push({ content: JSON.stringify({ text: '', why: '暂无' }) });
+  assert.equal(await mind.maybeEvolvePersona(), null, '没新的就不写');
+  assert.equal(mind.readMind().persona.text, keep, '旧补丁原样保留');
+  assert.equal(mind.readMind().personaHistory.length, before, '不变相重写留底');
+
+  // force 越过周期：刚写完 personaAt，正常调不跑，force 能立刻重跑（手动净化旧补丁用）
+  llmQueue.push({ content: JSON.stringify({ text: '她遇事先替别人想一步，嘴甜但不怼人', why: 'force 重跑' }) });
+  assert.equal(await mind.maybeEvolvePersona(), null, '周期内不 force 不跑');
+  assert.equal(await mind.maybeEvolvePersona(Date.now(), { force: true }), '她遇事先替别人想一步，嘴甜但不怼人', 'force 立刻重跑');
 });
