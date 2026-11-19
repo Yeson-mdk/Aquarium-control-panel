@@ -258,10 +258,11 @@ audience: 'owner', // 'owner' = 只跟号主聊；'public' = 好友私聊都聊 
     silentHours: 4, // 你多久没说话才算「隔了很久」
     activeStart: 9, // 只在这段时间里主动找（点）
     activeEnd: 22,
-    // 外挂（qq/dsh.mjs）：查资料交给她专用的 DSH 配置；做表情包直连 ModelScope，看图固定走 ModelScope（llm.seeImage）
+    // 外挂（qq/dsh.mjs）：查资料走模型接口的服务端联网工具（DeepSeek deepseek_web_search）；
+    // 做表情包直连 ModelScope，看图固定走 ModelScope（llm.seeImage）
     dsh: {
-      enabled: true,
-      profile: 'yangyu', // ~/.dsh/profiles/yangyu：只留联网搜索，其他工具都关掉
+      enabled: true, // 查资料总开关：关掉后她连 research 工具都看不到，一次都不会调
+      searchModel: 'deepseek-flash', // 联网搜索只挂在 deepseek-flash 上（官方要求），跟聊天的模型分开
       imageModel: 'Qwen/Qwen-Image-Edit', // ModelScope 上的改图模型（拿现有表情当底图改表情），令牌在 secrets.json 的 modelscopeToken
     },
     // 学歌外挂（qq/sqmusic.mjs）：连上 SqMusic（simple_sq_music_plus，要 ≥3.1.0）她就能自己下歌进曲库

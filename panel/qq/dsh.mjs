@@ -3,35 +3,34 @@
  *
  * 聊天还在面板里（brain.mjs），只有这三样交出去，做完她再用自己的口吻从小号跟号主说：
  *
- *  - 查资料（research）：用 DSH 官方命令行跑她专用的配置
- *      dsh --profile yangyu --json "任务"
- *    这个配置（~/.dsh/profiles/yangyu）只留联网搜索和读网页，跑命令、读写文件、子代理这些工具在配置里直接关掉，
- *    网页里就算藏了指令也没有手去碰你的文件。用的是公开的命令行，不是 DSH 的内部接口，升级不容易坏。
- *    每次在 data/dsh-jobs/<id>/ 这个空目录里跑，权限再压成只读。
- *  - 看图（describeImage）：已不接聊天看图（看图固定走 ModelScope，见 llm.seeImage），留着当 DSH 本地网关的看图工具。
+ *  - 查资料（research）：直接走面板「模型设置」里配的 DeepSeek 官方接口，开服务端联网工具 deepseek_web_search。
+ *    搜索和读网页都在 DeepSeek 服务端完成（2026-11-18 起这类服务端搜索不计费，只算模型 token），
+ *    模型自动按提问搜、带引用作答；面板开关 qq.dsh.enabled 关掉就一次都不调。
+ *    不再依赖桌面版 DSH 的命令行和本地网关——NAS 单容器也能用。
+ *  - 看图（describeImage）：已不接聊天看图（看图固定走 ModelScope，见 llm.seeImage），留着当工具函数。
  *  - 做表情包（makeSticker）：拿现有的一张表情当底图，交给 ModelScope 的改图模型（直连它的生图接口，异步提交、轮询结果）
  *    只改表情和动作（角色长相不变），存进 stickers/，下次聊天就能发。一天最多一张。
  *
- * 查资料、看图走 DSH 桌面版的本地网关（面板「模型」那里填的地址），桌面版 DSH 得开着；做表情包直连 ModelScope。
+ * 查资料走现有模型接口（面板「模型设置」的地址，需是 DeepSeek 官方接口），看图、做表情包直连 ModelScope。
  */
-import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as llm from '../llm.mjs';
-import { DATA, ROOT, readConfig, readSecrets, readState, writeState, logAction, localDate } from '../store.mjs';
+import { ROOT, readConfig, readSecrets, readState, writeState, logAction, localDate } from '../store.mjs';
 
-const DSH_BIN = process.env.DSH_BIN || '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh';
-const PROFILE_DIR = (name) => join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'profiles', name);
-const JOBS = join(DATA, 'dsh-jobs');
 const STICKERS = process.env.YANGYU_STICKERS || join(ROOT, 'stickers'); // 测试时指到临时目录
 
 export function status(cfg = readConfig().qq.dsh) {
+  const lc = readConfig().llm;
+  const base = String(lc.baseUrl || '').trim().toLowerCase();
   return {
-    enabled: cfg.enabled,
-    cli: existsSync(DSH_BIN),
-    profile: existsSync(join(PROFILE_DIR(cfg.profile), 'cordis.patch.yml')),
-    visionModel: cfg.visionModel, imageModel: cfg.imageModel, hasModelscopeToken: !!readSecrets().modelscopeToken,
+    enabled: !!cfg.enabled,
+    model: String(cfg.searchModel || 'deepseek-flash'),
+    // 联网搜索要求 DeepSeek 官方接口 + 同一个 key；中转站/别家接口多半不支持这个服务端工具
+    apiReady: llm.llmReady() && /deepseek\.com/.test(base),
+    baseUrl: String(lc.baseUrl || ''),
+    imageModel: cfg.imageModel, hasModelscopeToken: !!readSecrets().modelscopeToken,
     stickerOn: readState().stickerOn || null,
   };
 }
@@ -48,60 +47,45 @@ let running = Promise.resolve();
 
 /**
  * 跑一次：返回 { text, tools: [用到的工具名], ms }。同一时间只跑一个（排队）。
- * run 可以换掉（测试用），默认真的起 dsh 子进程。
+ * run 可以换掉（测试用），默认走模型接口的服务端联网工具。
  */
-export function research(question, { run = runDsh, timeoutMs = 3 * 60_000 } = {}) {
+export function research(question, { run = runSearch, timeoutMs = 3 * 60_000 } = {}) {
   const job = running.then(() => run(RESEARCH_TASK(question), { timeoutMs }));
   running = job.catch(() => {});
   return job;
 }
 
-export function runDsh(task, { timeoutMs = 3 * 60_000, cfg = readConfig().qq.dsh } = {}) {
-  if (!existsSync(DSH_BIN)) return Promise.reject(new Error('没找到 DSH 的命令行（装的是 DeepSeek Harness 桌面版吗？）'));
-  if (!existsSync(PROFILE_DIR(cfg.profile))) return Promise.reject(new Error(`DSH 里还没有「${cfg.profile}」这个配置，见 panel/qq/README.md`));
-  const dir = join(JOBS, `${Date.now()}`);
-  mkdirSync(dir, { recursive: true });
+/**
+ * 用 DeepSeek 的 Chat Completions 服务端工具联网搜索：请求里声明 deepseek_web_search，
+ * 搜索/抓取由服务端做，答案带引用（choices[0].message.annotations）。不计费搜索本身，只算 token。
+ * 工具调用和引用都不需要我们执行——模型直接给最终答案。
+ */
+export async function runSearch(task, { timeoutMs = 3 * 60_000, cfg = readConfig().qq.dsh, llmMod = llm } = {}) {
+  if (!cfg.enabled) throw new Error('联网查资料的功能关着（面板「自动养号 → QQ 连接 → 外挂」里能开）');
+  if (!llmMod.llmReady()) throw new Error('还没配模型 API Key（面板 → 自动养号 → 模型设置）');
+  const model = String(cfg.searchModel || 'deepseek-flash').trim() || 'deepseek-flash';
   const t0 = Date.now();
-  return new Promise((resolve, reject) => {
-    const p = spawn(DSH_BIN, ['--profile', cfg.profile, '--json', task], {
-      cwd: dir,
-      env: { ...process.env, YANGYU_GATEWAY_KEY: readSecrets().llmApiKey || '', DSH_PERMISSION_MODE: 'read-only' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let out = '';
-    let err = '';
-    p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (err += d));
-    // 超时就掐掉；掐掉时它可能还会吐一句半截话当 final，那不算答案
-    let killed = false;
-    const timer = setTimeout(() => { killed = true; p.kill('SIGTERM'); }, timeoutMs);
-    p.on('error', (e) => { clearTimeout(timer); reject(e); });
-    p.on('close', (code) => {
-      clearTimeout(timer);
-      rmSync(dir, { recursive: true, force: true });
-      if (killed) { reject(new Error(`查了 ${Math.round(timeoutMs / 60_000)} 分钟还没查完，先停了`)); return; }
-      const r = parseEvents(out);
-      if (code !== 0 || !r.text) {
-        const why = err.trim().split('\n').filter(Boolean).pop() || `退出码 ${code}`;
-        reject(new Error(r.text ? why : `DSH 没给出结果：${why}`));
-        return;
-      }
-      resolve({ ...r, ms: Date.now() - t0 });
-    });
-  });
-}
-
-/** dsh --json 的输出：一行一个事件，final 里是最后的回答 */
-export function parseEvents(ndjson) {
-  let text = '';
-  const tools = [];
-  for (const line of String(ndjson).split('\n')) {
-    let e;
-    try { e = JSON.parse(line); } catch { continue; }
-    if (e.type === 'tool_call' && e.tool) tools.push(e.tool);
-    if (e.type === 'final' && typeof e.text === 'string') text = e.text.trim();
+  let timer;
+  try {
+    const r = await Promise.race([
+      llmMod.chatRaw(
+        [{ role: 'user', content: task }],
+        { model, tools: [{ type: 'deepseek_web_search' }], maxTokens: 800, temperature: 0.7, tag: 'research', essential: true },
+      ),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`查了 ${Math.round(timeoutMs / 60_000)} 分钟还没查完，先停了`)), timeoutMs); }),
+    ]);
+    const msg = r.raw || {};
+    const text = String(r.content || '').trim();
+    if (!text) throw new Error('模型没给出查资料的结果');
+    // 引用在 annotations，正文里没有角标；把来源网址接到末尾，让 researchReply 能挑一个留
+    const cites = (Array.isArray(msg.annotations) ? msg.annotations : [])
+      .map((a) => String(a?.url_citation?.url || '').trim()).filter((u) => /^https?:\/\//i.test(u));
+    const sources = [...new Set(cites)].slice(0, 3);
+    const used = Array.isArray(msg.server_tool_calls) && msg.server_tool_calls.length ? ['联网搜索'] : [];
+    return { text: sources.length ? `${text}\n\n来源：${sources.join('  ')}` : text, tools: used, ms: Date.now() - t0 };
+  } finally {
+    clearTimeout(timer);
   }
-  return { text, tools };
 }
 
 // ─── 看图 ──────────────────────────────────────────────────

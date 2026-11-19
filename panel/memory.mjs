@@ -39,7 +39,21 @@ function load() {
   try {
     return JSON.parse(readFileSync(FILE, 'utf-8'));
   } catch {
-    if (existsSync(FILE)) return [];
+    // 文件存在但 JSON 坏了（断电/磁盘）：先改名留档再返回空，绝不能让下一次 add() 把坏文件覆盖成空表——
+    // 那样 1500 条记忆无声蒸发（2026-11-19 查出来的坑）。留档用时间戳，跟 bili.unlockCoin 一个范式。
+    if (existsSync(FILE)) {
+      const kept = `${FILE}.corrupt-${Date.now()}`;
+      try {
+        renameSync(FILE, kept); // 改名成功才告警：确认原始内容还在，方便人工捞
+        console.error('[memory] memories.json 坏了，已改名留档 ' + kept + '，先用空表重建（旧内容没删，可捞回）');
+        try { logAction({ kind: 'autopilot', source: 'auto', ok: false, detail: `🧠 记忆本子损坏，已改名留档（${kept.split('/').pop()}），暂用空表重建——旧内容没删，可从留档捞回` }); } catch { /* 日志不挡正事 */ }
+      } catch (e) {
+        // 改名都失败（只读盘/权限）：宁可返回空也别硬读，但这支会重建覆盖——告警让人知道盘有问题
+        console.error('[memory] memories.json 坏了且改名留档失败：' + e.message + '，这次用空表，原文件可能仍被覆盖');
+        try { logAction({ kind: 'autopilot', source: 'auto', ok: false, error: e.message, detail: '🧠 记忆本子损坏且改名留档失败，原文件可能被空表覆盖——检查磁盘/权限' }); } catch { /* 日志不挡正事 */ }
+      }
+      return [];
+    }
     const all = backfill();
     if (all.length) withLock(() => save(all)); // 首次重建也要抢锁，别两个进程同写 FILE.tmp
     return all;

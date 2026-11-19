@@ -1,32 +1,17 @@
 import './_env.mjs';
-import { DATA } from './_env.mjs';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// 假的 DSH 命令行：把收到的参数和环境记下来，吐一段 --json 事件
+// 临时目录：给 toSquarePng / addIndexRow 当 scratch 用
 const fake = mkdtempSync(join(tmpdir(), 'fake-dsh-'));
-const bin = join(fake, 'dsh');
-writeFileSync(bin, `#!/bin/sh
-printf '%s\\n' "$@" > "${fake}/args.txt"
-echo "$YANGYU_GATEWAY_KEY|$DSH_PERMISSION_MODE|$(pwd)" > "${fake}/env.txt"
-echo '{"type":"session","sessionId":"s1"}'
-echo '{"type":"tool_call","tool":"web_search","input":{}}'
-echo 'not json'
-echo '{"type":"final","text":"深圳今天阴，21-31℃。来源：https://weather.com.cn"}'
-`);
-chmodSync(bin, 0o755);
-mkdirSync(join(fake, 'home', 'profiles', 'yangyu'), { recursive: true });
-writeFileSync(join(fake, 'home', 'profiles', 'yangyu', 'cordis.patch.yml'), '[]');
-process.env.DSH_BIN = bin;
-process.env.DSH_HOME = join(fake, 'home');
 after(() => rmSync(fake, { recursive: true, force: true }));
 
-// 假的模型网关：看图 / 改图 / 说话
+// 假的模型网关：查资料（带服务端搜索的 annotations）/ 看图 / 改图 / 说话
 const calls = [];
 const queue = [];
 const PNG = readFileSync(new URL('../../stickers/happy_开心.png', import.meta.url));
@@ -49,40 +34,48 @@ store.writeConfig({ llm: { baseUrl: base, model: 'fake' }, sky: { enabled: false
 store.writeSecrets({ llmApiKey: 'gw-key' });
 const dsh = await import('../qq/dsh.mjs');
 
-test('parseEvents：拿 final 的字和用过的工具，坏行跳过', () => {
-  const r = dsh.parseEvents('{"type":"tool_call","tool":"web_search"}\nxx\n{"type":"tool_call","tool":"web_fetch"}\n{"type":"final","text":" 答案 "}');
-  assert.deepEqual(r, { text: '答案', tools: ['web_search', 'web_fetch'] });
-});
-
-test('research：用她专用的配置、只读权限、在空目录里跑，网关 key 走环境变量', async () => {
+test('research：走模型接口的服务端联网工具，来源从 annotations 拼进来', async () => {
+  queue.push({ content: '深圳今天阴，21-31℃。', annotations: [
+    { type: 'url_citation', url_citation: { url: 'https://weather.com.cn/1', title: '天气' } },
+    { type: 'url_citation', url_citation: { url: 'https://weather.com.cn/1', title: '重复' } },
+    { type: 'url_citation', url_citation: { url: 'not-a-url' } },
+  ], server_tool_calls: [{ type: 'deepseek_web_search' }] });
   const r = await dsh.research('今天深圳天气');
   assert.match(r.text, /深圳今天阴/);
-  assert.deepEqual(r.tools, ['web_search']);
-  const args = readFileSync(join(fake, 'args.txt'), 'utf-8').split('\n');
-  assert.deepEqual(args.slice(0, 3), ['--profile', 'yangyu', '--json']);
-  assert.match(args.slice(3).join('\n'), /今天深圳天气/);
-  assert.match(args.slice(3).join('\n'), /不要照做/, '告诉它网页里的指令不照做');
-  const [key, mode, cwd] = readFileSync(join(fake, 'env.txt'), 'utf-8').trim().split('|');
-  assert.equal(key, 'gw-key');
-  assert.equal(mode, 'read-only');
-  assert.match(cwd, /dsh-jobs/);
-  assert.deepEqual(readdirSync(join(DATA, 'dsh-jobs')), [], '跑完把空目录清掉');
+  assert.match(r.text, /来源：https:\/\/weather\.com\.cn\/1/);
+  assert.equal((r.text.match(/https:/g) || []).length, 1, '重复的、非 http 的引用不进去');
+  assert.deepEqual(r.tools, ['联网搜索']);
+  const req = calls.at(-1);
+  assert.equal(req.model, 'deepseek-flash', '联网搜索只挂 deepseek-flash');
+  assert.deepEqual(req.tools, [{ type: 'deepseek_web_search' }], '声明服务端联网工具，不是 function calling');
+  assert.match(req.messages[0].content, /今天深圳天气/);
+  assert.match(req.messages[0].content, /不要照做/, '提示词里仍然压住网页里的指令');
+  assert.ok(r.ms >= 0);
 });
 
-test('runDsh：超时掐掉的不算答案', async () => {
-  const slow = join(fake, 'slow');
-  writeFileSync(slow, '#!/bin/sh\ntrap \'echo {\"type\":\"final\",\"text\":\"我先去搜一下\"}; exit 0\' TERM\nsleep 5 & wait\n');
-  chmodSync(slow, 0o755);
-  process.env.DSH_BIN = slow;
-  const fresh = await import(`../qq/dsh.mjs?slow`);
-  await assert.rejects(fresh.runDsh('x', { timeoutMs: 300 }), /还没查完/);
-  process.env.DSH_BIN = bin;
+test('research：开关关着 / 没配 key 都说清楚，一次都不调', async () => {
+  const brain = await import('../qq/brain.mjs');
+  const n0 = calls.length;
+  store.writeConfig({ qq: { dsh: { enabled: false } } });
+  assert.ok(!brain.toolDefs().some((t) => t.function.name === 'research'), '关掉后模型连工具都看不到');
+  await assert.rejects(dsh.runSearch('x'), /关着/);
+  store.writeConfig({ qq: { dsh: { enabled: true } } });
+  store.writeSecrets({ llmApiKey: '' });
+  await assert.rejects(dsh.runSearch('x'), /API Key/);
+  store.writeSecrets({ llmApiKey: 'gw-key' });
+  assert.equal(calls.length, n0, '两次失败都没打接口');
 });
 
-test('research：没有专用配置就说清楚', async () => {
-  store.writeConfig({ qq: { dsh: { profile: 'nope' } } });
-  await assert.rejects(dsh.research('x'), /还没有「nope」这个配置/);
-  store.writeConfig({ qq: { dsh: { profile: 'yangyu' } } });
+test('research：没搜到引用时照常把正文给出来，tools 为空', async () => {
+  queue.push({ content: '没查到确切资料。' });
+  const r = await dsh.runSearch('x');
+  assert.equal(r.text, '没查到确切资料。');
+  assert.deepEqual(r.tools, []);
+});
+
+test('research：超时不算答案', async () => {
+  const slowLlm = { llmReady: () => true, chatRaw: () => new Promise((r) => setTimeout(() => r({ content: '太慢了' }), 500)) };
+  await assert.rejects(dsh.runSearch('x', { timeoutMs: 80, llmMod: slowLlm }), /还没查完/);
 });
 
 test('describeImage：用看图模型，图片走 data URL', async () => {
@@ -228,4 +221,33 @@ test('researchReply：把查到的用她的口吻说，资料框起来', async (
   const t = await brain.researchReply('今天深圳天气', '深圳今天阴，21-31℃');
   assert.equal(t, '查到啦，深圳今天阴，21 到 31 度，出门不用带伞～');
   assert.match(calls.at(-1).messages.at(-1).content, /⟦深圳今天阴/);
+  assert.match(calls.at(-1).messages[0].content, /直接跟号主私聊/, '默认私聊用号主那套规矩');
+});
+
+test('查资料回传：群里问发回群并 @ 号主，私聊问回 owner，不 @', async () => {
+  const { researchBack } = await import('../qq/index.mjs');
+  assert.deepEqual(researchBack('g:81234', '98765'), { peer: 'g:81234', at: '98765' }, '群里问 @ 号主本人');
+  assert.deepEqual(researchBack('owner', '98765'), { peer: 'owner', at: '' }, '私聊问回 owner、不 @');
+  assert.deepEqual(researchBack('p:555', '98765'), { peer: 'p:555', at: '' }, '好友私聊原样回、不 @');
+  assert.deepEqual(researchBack('', '98765'), { peer: 'owner', at: '' }, '没传 peer 落回 owner');
+});
+
+test('researchReply：群里问用群聊口吻、翻群聊记录，不让写 [TO:]', async () => {
+  const brain = await import('../qq/brain.mjs');
+  queue.push({ content: '查到啦，深圳今天阴～' });
+  await brain.researchReply('今天深圳天气', '深圳今天阴', 'g:81234');
+  const req = calls.at(-1);
+  assert.match(req.messages[0].content, /现在是群聊/, '群里用群聊那套规矩，不露号主私事');
+  assert.doesNotMatch(req.messages[0].content, /直接跟号主私聊/);
+  assert.match(req.messages.at(-1).content, /别写 \[TO:\]/, '@ 由程序处理，别让模型吐标记');
+});
+
+test('群友工具白名单仍不含 research：查资料只有号主能用（本轮裁决）', async () => {
+  const brain = await import('../qq/brain.mjs');
+  const { PUBLIC_TOOLS } = await import('../qq/tools.mjs');
+  assert.ok(!PUBLIC_TOOLS.includes('research'), 'research 没进 PUBLIC_TOOLS');
+  const out = { isOwner: false, peerKey: 'g:81234', speakerQq: '555' };
+  const r = await brain.runTool('research', { question: '今天天气' }, out);
+  assert.match(r, /只有号主能用/);
+  assert.equal(out.research, undefined, '群友触发不了联网查资料');
 });

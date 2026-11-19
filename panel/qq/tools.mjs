@@ -72,6 +72,10 @@ export const selfiePool = () => Object.entries(stickerNotes()).filter(([, w]) =>
 function stickerNames() {
   try { return readdirSync(STICKERS).filter((f) => /\.(png|jpe?g|gif)$/i.test(f)).map((f) => f.slice(0, f.lastIndexOf('.'))).sort(); } catch { return []; }
 }
+/** 是不是一张现成的表情包（brain 兜底「模型把 [发了表情包] 历史标记复读成裸文件名」时用） */
+export function hasSticker(name) {
+  return stickerNames().includes(String(name || ''));
+}
 // 她自己存的表情包带的「场合备注」（存图时顺手写的什么时候用），挑表情包时看得见
 const STICKER_NOTES = join(STICKERS, 'notes.json');
 function stickerNotes() {
@@ -109,7 +113,7 @@ export function toolDefs() {
     fn('bili_tasks', '看看交给后台的活做到哪了'),
     fn('pause', '号主要你先停（打游戏、开会）：后台不刷、不回评论、不主动找他', { reason: { type: 'string' }, hours: { type: 'number', description: '他说了多久就填，没说就不填' } }),
     fn('resume', '号主说好了，接着过自己的日子'),
-    fn('research', '联网查资料（交给 DSH 去搜、去看网页），查到了会让你自己告诉号主。要等十几秒到一两分钟', {
+    fn('research', '联网查资料（她自己上网搜、看网页，答案是带来源的），查到了会让你自己告诉号主。要等十几秒到一分钟', {
       question: { type: 'string', description: '要查的问题，写清楚，带上时间地点这些' },
     }, ['question']),
     fn('search_meme', '查网络梗、流行语、缩写、黑话是什么意思、怎么接（cnmeme.wiki 梗百科，查不到用本地词库兜底）。梗图上的词一律先查再接，聊天里没把握的词也查，别硬猜；查到优先照「怎么用」接梗，别当词典念；查不到就说不知道，别编', {
@@ -157,7 +161,8 @@ export function toolDefs() {
       taskNote: { type: 'string', description: 'kind=task 时填，要干的活在句话，比如「去特别关注那儿看看新动态」' },
       text: { type: 'string', description: '号主的原话或任务说明，留在赴约上下文里' },
     }, ['kind', 'dueAt', 'text']),
-  ];
+    // 查资料总开关：关掉后模型连这个工具都看不到，从源头保证一次都不调（面板「外挂」那里切）
+  ].filter((t) => t.function.name !== 'research' || readConfig().qq?.dsh?.enabled !== false);
 }
 
 /**
@@ -540,7 +545,7 @@ export async function runTool(name, args, out) {
       if (!q) return '要查什么？';
       if (!readConfig().qq.dsh.enabled) return '查资料这个功能关着，跟他说一声';
       out.research = q;
-      return '交给 DSH 去查了，查到了会让你自己告诉他；这条回复应一声让他稍等，别编答案';
+      return '去联网查了，查到了会让你自己告诉他；这条回复应一声让他稍等，别编答案';
     }
     case 'make_sticker': {
       if (readState().stickerOn === localDate()) return '今天已经做过一张了，明天再说';

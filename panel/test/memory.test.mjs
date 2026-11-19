@@ -236,3 +236,27 @@ test('tidy 合成的印象继承对话钥匙和 src 原话锚点', async () => {
   assert.ok(g, '印象带着对话钥匙（近况、归组全靠它）');
   assert.ok((g.src || []).some((s) => /4090/.test(s)), '原话锚点跟着进了印象');
 });
+
+test('memories.json 损坏：改名留档、返回空表，不静默覆盖（1500 条蒸发那个坑）', async () => {
+  const { writeFileSync, readFileSync, readdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { DATA } = await import('./_env.mjs');
+  const memFile = join(DATA, 'memories.json');
+  const good = JSON.stringify([{ id: 'keep-me', ts: iso(1), kind: 'chat', imp: 3, text: '不能丢的旧记忆', keys: [], seen: null, n: 0 }]);
+  writeFileSync(memFile, good);
+  assert.equal(memory.allEntries().length, 1, '先有一条真记忆');
+
+  // 模拟断电写坏：文件还在，但 JSON 截断
+  const broken = good.slice(0, 20);
+  writeFileSync(memFile, broken);
+  assert.deepEqual(memory.allEntries(), [], '损坏时返回空表，别拿半截当记忆');
+
+  const kept = readdirSync(DATA).filter((f) => f.startsWith('memories.json.corrupt-'));
+  assert.equal(kept.length, 1, '留了一份 corrupt 备份');
+  assert.equal(readFileSync(join(DATA, kept[0]), 'utf-8'), broken, '留档里是损坏时的原始内容，可人工捞');
+
+  // 下一次 add 是在空表上重建，不是覆盖坏文件；留档仍在
+  memory.add({ kind: 'chat', imp: 3, keys: [], text: '损坏后新记的一条' });
+  assert.ok(memory.allEntries().some((e) => e.text === '损坏后新记的一条'), '重建后能正常写新记忆');
+  assert.equal(readdirSync(DATA).filter((f) => f.startsWith('memories.json.corrupt-')).length, 1, '重建不吞掉留档');
+});

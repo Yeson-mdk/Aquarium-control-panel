@@ -466,7 +466,7 @@ async function deliver(out, peer = 'owner') {
   // 点歌时那句「唱啦」必须排在音频后面：交给 singThenSay 在歌真正发出去后再发，
   // 这里先别发文字——不然群里先看到话、几十秒后才听到歌，像说了空话（2026-11-18）。
   if (t && !out.singingTask) await sendChatLines(t, peer, at);
-  if (out.research) doResearch(out.research);
+  if (out.research) doResearch(out.research, peer);
   if (out.makeSticker) doSticker(out.makeSticker);
   if (out.sticker) {
     try {
@@ -498,17 +498,25 @@ async function deliver(out, peer = 'owner') {
 }
 
 // ─── 外挂：后台做，做完她自己说 ───────────────────────────────
-function doResearch(question) {
-  logAction({ kind: 'qq', source: 'auto', detail: `🔎 交给 DSH 去查：${question.slice(0, 60)}` });
+/** 查资料结果回哪：从哪问发回哪，群里问 @ 号主本人。research 只有号主能用，问的人一定是号主 */
+export function researchBack(peer = 'owner', ownerQQ = readConfig().qq.ownerQQ) {
+  const backPeer = peer || 'owner';
+  return { peer: backPeer, at: backPeer.startsWith('g:') ? String(ownerQQ || '') : '' };
+}
+
+/** 查资料：从哪问的发回哪（群里问发回群、私聊问发回私聊），群里 @ 号主本人。research 只有号主能用 */
+function doResearch(question, peer = 'owner') {
+  const { peer: backPeer, at: atQq } = researchBack(peer);
+  logAction({ kind: 'qq', source: 'auto', detail: `🔎 联网查资料：${question.slice(0, 60)}`, meta: { peer: backPeer } });
   dsh.research(question)
     .then(async (r) => {
-      logAction({ kind: 'qq', source: 'auto', detail: `🔎 查到了（${Math.round(r.ms / 1000)} 秒，用了 ${[...new Set(r.tools)].join('、') || '没用工具'}）`, meta: { question } });
-      const line = await brain.researchReply(question, r.text).catch(() => r.text.slice(0, 600));
-      await sendText(line || r.text.slice(0, 600), 'report');
+      logAction({ kind: 'qq', source: 'auto', detail: `🔎 查到了（${Math.round(r.ms / 1000)} 秒，用了 ${[...new Set(r.tools)].join('、') || '没用工具'}）`, meta: { question, peer: backPeer } });
+      const line = await brain.researchReply(question, r.text, backPeer).catch(() => r.text.slice(0, 600));
+      await sendText(line || r.text.slice(0, 600), 'report', backPeer, atQq);
     })
     .catch(async (e) => {
-      logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `🔎 没查成：${question.slice(0, 40)}` });
-      await sendText('呜，我去查了一圈没查成 qwq 晚点再帮你看看？', 'report').catch(() => {});
+      logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `🔎 没查成：${question.slice(0, 40)}`, meta: { peer: backPeer } });
+      await sendText('呜，我去查了一圈没查成 qwq 晚点再帮你看看？', 'report', backPeer, atQq).catch(() => {});
     });
 }
 
@@ -544,16 +552,17 @@ function doSticker(x) {
     .catch((e) => logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: '想给自己做张新表情（' + (x.zh || '') + '），没做成' }));
 }
 
-export async function sendText(text, kind, peer = 'owner') {
+export async function sendText(text, kind, peer = 'owner', atQq = '') {
   if (!bot) throw new Error('QQ 小号没开');
   // 模型在汇报类消息里也可能带 [TO:名字]（learnReply 那些继承了群聊规矩），在这儿统一剥掉换 @，
   // 免得标记原样发出去；deliver() 那份转换管不到这条路
-  let at = '';
+  // atQq：调用方已经知道要 @ 谁时（比如群里问的号主，查完 @ 回他）直接传 QQ 号，不走名字反查
+  let at = atQq && peer.startsWith('g:') ? String(atQq) : '';
   let body = String(text || '');
   const to = body.match(/^\s*\[TO:([^\]]+)\]\s*/);
   if (to) {
     body = body.slice(to[0].length);
-    if (peer.startsWith('g:')) at = findGroupMember(peer, to[1]) || '';
+    if (peer.startsWith('g:') && !at) at = findGroupMember(peer, to[1]) || '';
   }
   if (!body.trim()) return; // 空内容发出去 QQ 会显示「该消息类型暂不支持查看」，干脆不发
   await chainSend(peer, async () => {

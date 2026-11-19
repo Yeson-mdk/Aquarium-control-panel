@@ -1800,3 +1800,42 @@ test('应答短句先认对象：「看看时间」是在回别人的话，不�
   const psys = llmCalls.slice(n).map((r) => r.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n')).join('\n');
   assert.match(psys, /自己要去确认|自己去确认/, '好友私聊也带了同款事实');
 });
+
+test('FAV 解析走 looseJson：字符串分、字段换序、截断尾巴都能记对，不抠错数字', async () => {
+  const fav = await import('../fav.mjs');
+  // 字符串值 "1"：老正则在 "d" 后抠数字也能中，但要确认走对象解析后照样记 +1
+  llmQueue.push({ content: '好呀[FAV:{"d":"1","why":"被夸了"}]' });
+  await brain.reply('你真好看', { qq: '47001', peer: 'p:47001', name: '小甲', fids: [] });
+  assert.equal(fav.todayNet('47001'), 1, '字符串分值记对');
+
+  // 字段换序 + why 里带数字：老正则 slice 到 "d" 后抠会把 why 的数字也卷进来，looseJson 按字段取值不受影响
+  llmQueue.push({ content: '嗯嗯[FAV:{"why":"提到2次生日","d":-2}]' });
+  await brain.reply('又提生日', { qq: '47002', peer: 'p:47002', name: '小乙', fids: [] });
+  assert.equal(fav.todayNet('47002'), -2, '字段换序 + why 带数字，分值仍是 -2 不被抠错');
+
+  // 截断尾巴：{"d":2,"why":"被逗笑] —— JSON 缺了 } 但标记闭合，looseJson 补齐后仍能拿到 d
+  llmQueue.push({ content: '哈哈[FAV:{"d":2,"why":"被逗笑]' });
+  await brain.reply('讲个笑话', { qq: '47003', peer: 'p:47003', name: '小丙', fids: [] });
+  assert.equal(fav.todayNet('47003'), 2, '被截断的 FAV JSON 靠 looseJson 补齐记对');
+});
+
+test('表情包复读兜底：模型吐裸文件名/历史标记时转成真图，正常聊天不误伤', async () => {
+  const echo = brain.stickerEcho;
+  assert.equal(echo('shy_害羞'), 'shy_害羞', '裸文件名');
+  assert.equal(echo('[发了表情包] shy_害羞'), 'shy_害羞', '历史标记复读（线上原样）');
+  assert.equal(echo('[表情包shy_害羞]'), 'shy_害羞', '输入侧摘要外壳');
+  assert.equal(echo(''), '', '空文本');
+  assert.equal(echo('我觉得 shy_害羞 那张挺好看'), '', '整条不是光文件名 → 正常聊天不误转');
+  assert.equal(echo('不存在的表情包_xyz'), '', '不存在的名字不转');
+
+  // 集成：模型只吐裸文件名时，reply 应给 sticker 而不是文字
+  llmQueue.push({ content: 'shy_害羞' });
+  const out = await brain.reply('我喜欢你们俩', { qq: '48001', peer: 'p:48001', name: '小丁', fids: [] });
+  assert.equal(out.sticker, 'shy_害羞', '转成真图');
+  assert.equal(out.text, '', '不再把文件名当话说出去');
+
+  // 模型正常调了工具时不动（已经有 sticker 就不重复转）
+  llmQueue.push({ content: '嗯哼' });
+  const out2 = await brain.reply('再来一张', { qq: '48002', peer: 'p:48002', name: '小戊', fids: [] });
+  assert.equal(out2.sticker, undefined, '没吐文件名就不凭空加图');
+});

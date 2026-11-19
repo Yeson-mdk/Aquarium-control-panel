@@ -1112,9 +1112,10 @@ async function pageAutopilot(main) {
           </div>
         </details>
         <details class="cfg-fold">
-          <summary>外挂：查资料（DSH）</summary>
+          <summary>外挂：联网查资料</summary>
           <div class="cfg-grid qq-grid">
-            ${tog('qq.dsh.enabled', '外挂：查资料', '借 DSH：查资料走她专用的 DSH 配置（看图、做表情不走它，直连 ModelScope）')}
+            ${tog('qq.dsh.enabled', '外挂：查资料', '开：她能联网搜网页、带来源回答；关：连工具都看不到，一次都不会调（看图、做表情不受影响，直连 ModelScope）')}
+            <div><label class="f">查资料用的模型</label><input data-path="qq.dsh.searchModel" value="${esc(c.qq.dsh.searchModel || 'deepseek-flash')}" placeholder="deepseek-flash" autocomplete="off"><div class="hint">联网搜索官方只挂在 deepseek-flash 上，别改成聊天用的模型；要填 DeepSeek 官方接口（搜索服务端做，只算 token 钱）</div></div>
           </div>
           <div class="small muted" id="qqDsh" style="padding:0 12px 10px"></div>
         </details>
@@ -1317,7 +1318,9 @@ async function pageAutopilot(main) {
         ? `<span class="chip amber">角色卡只抓到 ${pi.sections} 节（该有 8 节），可能传了旧版或缺节</span>`
         : `人格卡：${pi.sections} 节 · ${pi.chars} 字 · 改于 ${esc(pi.updated)}${pi.patch ? ` · 进化补丁 ${pi.patch} 字` : ''}`;
     const d = q.dsh || {};
-    $('#qqDsh').textContent = !d.enabled ? '外挂关着' : !d.cli ? '⚠️ 没找到 DSH 的命令行，查资料用不了' : !d.profile ? `⚠️ DSH 里还没有「她专用」的配置，查资料用不了（见 panel/qq/README.md）` : `外挂就绪：查资料走她专用的 DSH · ${d.hasModelscopeToken ? '做表情包：令牌已填' : '做表情包：还没填 ModelScope 令牌'}${d.stickerOn ? ` · 今天（${d.stickerOn}）做过新表情了` : ''}`;
+    $('#qqDsh').textContent = !d.enabled ? '联网查资料关着（她看不到这个工具）'
+      : !d.apiReady ? `⚠️ 查资料要用 DeepSeek 官方接口 + Key，现在填的是 ${d.baseUrl || '空'}，联网搜索用不了（面板「模型设置」里改）`
+      : `联网查资料就绪：走 ${esc(d.model || 'deepseek-flash')} 的服务端搜索 · ${d.hasModelscopeToken ? '做表情包：令牌已填' : '做表情包：还没填 ModelScope 令牌'}${d.stickerOn ? ` · 今天（${d.stickerOn}）做过新表情了` : ''}`;
     // 「她记得的关于你的事」搬到记忆页了（pageMemory 的「关于你的事」标签，可以切换着看）
   };
   api('/api/qq').then(qqRender).catch(() => {});

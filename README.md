@@ -52,7 +52,9 @@ cd panel ; node panel.mjs        # 浏览器开 http://127.0.0.1:8899
 # 再跑 NapCat（panel/qq/napcat 里 docker compose up -d），面板填 ws://127.0.0.1:3001
 ```
 
-**面板里要配的**：模型设置（OpenAI 兼容接口；可选备用聊天模型，主模型配置出错时自动降档）、QQ 连接（ModelScope 令牌，看图用）、B 站登录（用**她的号**扫码）、自动养号（选时辰、开总开关）。向量模型选填，配完点「测试向量模型」，再跑一次 `node panel/backfill-vec.mjs` 给旧记忆补向量。
+**面板里要配的**：模型设置（OpenAI 兼容接口；联网查资料要填 DeepSeek 官方地址，可选备用聊天模型主模型出错时自动降档）、QQ 连接（ModelScope 令牌，看图/做表情用；联网查资料的开关和外挂也在这）、B 站登录（用**她的号**扫码）、自动养号（选时辰、开总开关）。向量模型选填，配完点「测试向量模型」，再跑一次 `node panel/backfill-vec.mjs` 给旧记忆补向量。
+
+> 联网查资料走 DeepSeek 官方接口的服务端联网工具（`deepseek-flash` + `deepseek_web_search`），搜网页/读原文不额外收费、只算模型 token；不需要桌面版 DSH，NAS 单容器就能用。开关关掉后她连这个工具都看不到，一次都不会调。
 
 > ⚠️ 面板和 WebUI 都只留局域网，别做公网端口转发。
 
