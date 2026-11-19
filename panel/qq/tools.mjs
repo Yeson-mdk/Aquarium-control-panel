@@ -63,7 +63,7 @@ export function songB64(file) {
 }
 const VOICES = ['Meijia', 'Flo', 'Eddy'];
 // 公共模式（好友/群）能用的工具：菜单（toolDefs 发哪些）和门禁（runTool 放哪些）都认这一份，别再各写各的
-export const PUBLIC_TOOLS = ['send_sticker', 'send_selfie', 'save_sticker', 'send_voice', 'search_meme', 'recall_time', 'list_songs', 'sing_song', 'learn_song', 'send_text', 'set_appointment']; // recall_time 只翻当前对话自己的历史（群里的翻群、好友翻好友），不碰号主私聊；唱歌发的是曲库本地文件，不花钱；学歌就是下个 mp3 进曲库（有 200 首的上限兜底）——都放行。set_appointment 放行给群友，但 case 里限死只能约本群、@发起人本人（号主裁决 2026-11-18）
+export const PUBLIC_TOOLS = ['send_sticker', 'send_selfie', 'save_sticker', 'send_voice', 'search_meme', 'recall_time', 'recall_here', 'list_songs', 'sing_song', 'learn_song', 'send_text', 'set_appointment']; // recall_time 只翻当前对话自己的历史（群里的翻群、好友翻好友），不碰号主私聊；recall_here 同理但按话题相关度翻、给触景生情用（scope 锁死本对话，不带 up: 特权键）——都放行。唱歌发的是曲库本地文件，不花钱；学歌就是下个 mp3 进曲库（有 200 首的上限兜底）。set_appointment 放行给群友，但 case 里限死只能约本群、@发起人本人（号主裁决 2026-11-18）
 // 号主钦点的「被要自拍」糊弄图：代码随机抽一张，不让她自己挑（自己挑会有偏好，老是同一张）。
 // 池子不写死名单：notes.json 里备注带了「send_selfie」的那几张就是糊弄图——加自拍=丢图+写备注，不用改代码
 export const selfiePool = () => Object.entries(stickerNotes()).filter(([, w]) => w.includes('send_selfie')).map(([n]) => n);
@@ -101,6 +101,7 @@ export function toolDefs() {
     }, ['text']),
     fn('fix_fact', '改正 / 删掉一条记错了的号主的事（id 是事实前面 # 后面那串）。text 留空就是删掉', { id: { type: 'string' }, text: { type: 'string' } }, ['id']),
     fn('recall', '翻翻自己的记忆：以前刷过的视频、跟谁聊过、以前跟号主聊过的话', { query: { type: 'string' } }, ['query']),
+    fn('recall_here', '触景生情专用：眼前这句话让你想起「这个对话」以前聊过的旧事时，按话题翻一翻。只翻当前群/当前私聊自己的记忆和聊天原文，绝不会带出号主私事或别的对话。想起什么就自然带一句，没翻到别硬编。跟 recall_time 的区别：那个按时间段翻（「昨天中午聊了啥」），这个按话题相关度翻（「这句让我想起以前聊过的…」）', { query: { type: 'string', description: '眼前触动你的那句话、那个话题，照当下的意思写' } }, ['query']),
     fn('recall_time', '按时间段翻这个对话的聊天原文（直接去翻历史文件，不是翻记忆）。他问「中午/昨天/上周/周六/23点」聊了啥、上文里又翻不到时用这个。别自己凭印象答，翻完照实说', {
       period: { type: 'string', description: '时间段，原话照抄或转成「10月31日 23:05」这种。支持：刚才/昨天/前天/上周、周几（上周六）、几月几号、31号（不带月）、几点几分、23点之后，可组合' },
     }, ['period']),
@@ -434,6 +435,28 @@ export async function runTool(name, args, out) {
         .sort((x, y) => y.s - x.s).slice(0, 5)
         .map(({ e }) => `- ${memory.ago(e.ts)}${e.from === 'owner' ? '他说' : '我说'}：${e.text.slice(0, 80)}`);
       return [...mine, ...said].join('\n') || `想不起来跟「${q}」有关的事`;
+    }
+    case 'recall_here': {
+      // 触景生情：只翻「当前这个对话」的旧事。两道闸缺一不可——
+      // (1) memory.recall 传 scope:[peer]：号主私聊、别的群/好友的日结与印象都过不了 scopeVisible；
+      //     不传 keys 里的 up:——那是号主专属特权键，会把号主关注的 UP 主记忆带进来。
+      // (2) 聊天原文用 owner.readChat(peer)，不是 recall 那个默认的 owner（号主私聊原文）。
+      // 这样群友/好友翻到的只可能是本对话真发生过的事，不会把号主私事带出去（2.8 + B1 裁决）。
+      const q = String(a.query || '');
+      const peer = String((out && out.peerKey) || 'owner');
+      const mine = memory.recall(q, { scope: [peer], k: 5, touch: false }).map(memory.recallLine);
+      const nowMs = Date.now();
+      const said = owner.readChat(peer).filter((e) => e.text && e.kind !== 'reset' && owner.overlap(e.text, q) > 0.3)
+        .map((e) => {
+          const age = nowMs - Date.parse(e.ts);
+          const fresh = age > 20 * 86400_000 ? 0.1 : age > 10 * 86400_000 ? 0.3 : age > 5 * 86400_000 ? 0.6 : 1;
+          return { e, s: owner.overlap(e.text, q) * fresh };
+        })
+        .sort((x, y) => y.s - x.s).slice(0, 5)
+        .map(({ e }) => `- ${memory.ago(e.ts)}${e.from === 'owner' ? '他' : '我'}说：${e.text.slice(0, 80)}`);
+      const hit = [...mine, ...said].join('\n');
+      if (hit) return `【只想起了这个对话里的事】\n${hit}`;
+      return `这个对话里想不起跟「${q}」有关的旧事`;
     }
     case 'recall_time': {
       // 按时间段捞原文：上下文窗口有限，「昨天中午聊了啥」这种可能已被挤出窗口，得真去翻当前对话的历史文件。

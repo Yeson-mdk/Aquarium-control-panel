@@ -1839,3 +1839,32 @@ test('表情包复读兜底：模型吐裸文件名/历史标记时转成真图�
   const out2 = await brain.reply('再来一张', { qq: '48002', peer: 'p:48002', name: '小戊', fids: [] });
   assert.equal(out2.sticker, undefined, '没吐文件名就不凭空加图');
 });
+
+test('B1 recall_here：群友触景生情只翻本对话，号主私聊/别的群的记忆和原文都不泄漏', async () => {
+  const memory = await import('../memory.mjs');
+  const { writeFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { DATA } = await import('./_env.mjs');
+  const kw = '海盐芝士鲸鱼触景 EightNine'; // 独特词，不撞别的测试
+  const here = memory.add({ kind: 'chat', imp: 4, keys: ['g:9910'], text: `本群旧事甲：${kw}那次聊天` });
+  memory.add({ kind: 'chat', imp: 4, keys: ['owner'], text: `号主私聊乙：${kw}不能说出去` });
+  memory.add({ kind: 'chat', imp: 4, keys: ['g:9911'], text: `别的群丙：${kw}也聊过` });
+  const fHere = join(DATA, 'qq-chat-g_9910.jsonl');
+  const fOther = join(DATA, 'qq-chat-g_9911.jsonl');
+  const iso = new Date().toISOString();
+  writeFileSync(fHere, JSON.stringify({ ts: iso, from: 'her', text: `${kw} 本群原文丁` }) + '\n');
+  writeFileSync(fOther, JSON.stringify({ ts: iso, from: 'her', text: `${kw} 别群原文戊` }) + '\n');
+  try {
+    const r = await brain.runTool('recall_here', { query: kw }, { peerKey: 'g:9910' });
+    assert.ok(r.includes('只想起了这个对话里的事'), '标了只翻本对话');
+    assert.ok(r.includes('本群旧事甲'), '本群记忆翻得到');
+    assert.ok(!r.includes('号主私聊乙'), '号主私聊记忆不泄漏给群友');
+    assert.ok(!r.includes('别的群丙'), '别的群记忆不泄漏');
+    assert.ok(r.includes('本群原文丁'), '本群聊天原文翻得到');
+    assert.ok(!r.includes('别群原文戊'), '别的群聊天原文不泄漏');
+    assert.equal(memory.allEntries().find((e) => e.id === here.id).n, 0, '触景生情 touch:false，不刷想起计数');
+  } finally {
+    rmSync(fHere, { force: true });
+    rmSync(fOther, { force: true });
+  }
+});
