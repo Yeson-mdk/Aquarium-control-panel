@@ -32,6 +32,12 @@ export const DEFAULTS = {
   gate: {
     debounceGroupMs: 1200,   // 群聊防抖：等这么久没新消息才一起回
     debouncePrivateMs: 2500, // 私聊防抖（号主爱连发）
+    // 回复时机抖动（panel/qq/jitter.mjs）：让防抖不再是每次都一样的死值。
+    // 默认全 0 = 关闭，行为与加抖动前逐毫秒一致。想活一点：amplitude 0.2~0.3、frequency 0.5~0.7。
+    jitterAmplitude: 0,      // 幅度：±占目标值的比例（0~1）。0.25 = 1200ms 抖到 900~1500ms
+    jitterFrequency: 0,      // 频率：多少比例的消息真抖（0~1），其余照目标值。1=条条抖，0=不抖
+    jitterMinMs: 0,          // 范围下界（毫秒），0=不设；防止幅度太大抖得过短
+    jitterMaxMs: 0,          // 范围上界（毫秒），0=不设；防止抖得过长显得迟钝
     userRateWindowMin: 0.5,  // 同一人限流：这个窗口内（分钟，0.5=半分钟）
     userRateMax: 3,          // 最多让她自由插嘴回几次（@ 和私聊不受限）
     herRateWindowMin: 3,     // 她自己的熔断窗口（分钟）：防跟群里其他模型对刷

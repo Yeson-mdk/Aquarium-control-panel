@@ -15,6 +15,7 @@ import * as sqmusic from './sqmusic.mjs';
 import * as dsh from './dsh.mjs';
 import * as owner from './owner.mjs';
 import { tuning } from './tuning.mjs';
+import { jitterDelay, gateJitter } from './jitter.mjs';
 import { decideRate, calmMs, exemptKey } from './rate.mjs';
 import * as memory from '../memory.mjs';
 import * as recallCheck from '../recall-check.mjs';
@@ -32,6 +33,8 @@ const exemptDaily = new Map(); // C2 每日豁免上限：'peer:QQ号:日期' �
 const attackHits = new Map();  // C2 冷静窗：'peer:QQ号' → 最近几次怼/复读的时间戳
 const calmUntil = new Map();   // C2 冷静窗：'peer:QQ号' → 冷静到几毫秒（期间自由插嘴全拦）
 const conv = (peer) => { if (!convs.has(peer)) convs.set(peer, { queue: [], timer: null, busy: false, lastQq: null, seenImgs: [] }); return convs.get(peer); };
+// 防抖延时加可控抖动：默认参数下原样返回目标值，零回归。配置关着时连随机都不消耗。
+const debounceMs = (base) => jitterDelay(base, gateJitter(tuning().gate));
 // 她看过的图按对话留 3 分钟：人家常常发完图、隔一句才说「存成表情包」，那时图也得还在手上
 const rememberImgs = (peer, imgs) => {
   if (!imgs.length) return;
@@ -140,7 +143,7 @@ async function onNotice(ev) {
     if (qq) c.lastQq = qq;
     c.queue.push({ text: POKE_INPUT(name), ts: Date.now(), name, fid });
     clearTimeout(c.timer);
-    c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), tuning().gate.debouncePrivateMs);
+    c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), debounceMs(tuning().gate.debouncePrivateMs));
   };
   if (ev.group_id) {
     if (!pub) return; // 只认号主时，群里的动静整个不看
@@ -269,7 +272,7 @@ async function onMessage(ev) {
     c.queue.push({ text, ts: Date.now(), name, fid, imgs, qq: ev.user_id, free: !at }); // free 的批次她可以选择不吭声（SKIP）；qq 记说话的人，好感单人批次才记分用
     clearTimeout(c.timer);
     // 群聊节奏快，防拆条等 1.2 秒就够（等久了回复落地时又被新消息超过，永远慢一拍）；私聊他爱连发，仍等 2.5 秒
-    c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), tuning().gate.debounceGroupMs);
+    c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), debounceMs(tuning().gate.debounceGroupMs));
     return;
   }
   if (ev.message_type !== 'private') return;
@@ -301,7 +304,7 @@ async function onMessage(ev) {
   c.queue.push({ text, ts: Date.now(), name: ev.sender?.card || ev.sender?.nickname || '', fid, imgs }); // 好感档案记名字用，多人时不至于一排裸 QQ 号
   // 他常常一句话分几条发：等 2.5 秒没新的再一起回
   clearTimeout(c.timer);
-  c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), tuning().gate.debouncePrivateMs);
+  c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), debounceMs(tuning().gate.debouncePrivateMs));
 }
 
 async function flush(peer = 'owner') {

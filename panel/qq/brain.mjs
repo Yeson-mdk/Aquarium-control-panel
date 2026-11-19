@@ -426,16 +426,28 @@ export function tidyReply(text) {
 
 /** 她偶尔把聊天历史里「[发了表情包] shy_害羞」这种标记当自己的话说出来（历史格式是给模型看的，
  *  tidyReply 只剥标记，留下裸文件名 → 用户看到的是「shy_害羞」这行字而不是一张图）。
- *  整条恰好是一张现成表情包时，翻译成真图发出去。只认整条，不碰正常聊天里提到名字；
- *  自拍池不走这条（send_selfie 的随机挑选和「自拍只给号主」的权限闸不能绕）。 */
+ *  把回复文本里的表情包标记翻译成真图：整条光是名字，或正文末尾缀着一个名字（如
+ *  「揍谁呀… surr_投降」）都认，返回 { name, text }——text 是剥掉标记后该照常发出的正文。
+ *  名字必须在表情包池里、且不在自拍池（send_selfie 的随机挑选和「自拍只给号主」的闸不能绕）。 */
 export function stickerEcho(text) {
   const t = String(text || '').trim();
-  if (!t) return '';
-  // 历史标记前缀 [发了表情包] / 输入侧摘要外壳 [表情包xx] 都剥掉，剩下的整条必须就是名字本身
+  if (!t) return null;
+  // 历史标记前缀 [发了表情包] / 输入侧摘要外壳 [表情包xx] 都剥掉
   const s = t.replace(/^\[发了表情包\]\s*/, '').replace(/^\[表情包\s*([^\]]+)\]$/, '$1').trim();
-  if (!/^[A-Za-z0-9_\u4e00-\u9fa5]+$/.test(s)) return ''; // 带别的话就不认，别把正常聊天误转成图
-  if (!hasSticker(s) || selfiePool().includes(s)) return '';
-  return s;
+  const NAME = '[A-Za-z0-9_\\u4e00-\\u9fa5]+';
+  let name = '';
+  let rest = '';
+  if (new RegExp(`^${NAME}$`).test(s)) {
+    // 整条就是名字（含历史标记剥完的情形）
+    name = s;
+  } else {
+    // 正文末尾缀一个独立成段的名字：前面必须有空白，避免把「xxsurr_投降」这种粘连词误切；
+    // 末尾标点/语气词（。！？~…）容得下，因为模型常在标记后顺手点个句号。
+    const m = s.match(new RegExp(`^(.+?\\S)\\s+(${NAME})[\\s。！!？?~～…]*$`));
+    if (m) { name = m[2]; rest = m[1].trim(); }
+  }
+  if (!name || !hasSticker(name) || selfiePool().includes(name)) return null;
+  return { name, text: rest };
 }
 
 // ─── 回一句 ────────────────────────────────────────────────
@@ -585,12 +597,12 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
       try { fav.applyDelta(qq || readConfig().qq.ownerQQ, d, why.slice(0, 40), { nickname: name }); } catch (e) { console.error('[fav] 记分', e.message); }
     }
   }
-  // 兜底：模型把历史标记复读成裸文件名（tidyReply 剥了 [发了表情包]，只剩「shy_害羞」当话说），
-  // 或干脆只吐了个表情包名——整条就一张现成表情包时转成真图，别让用户看到文件名文本。
+  // 兜底：模型把表情包标记复读成文本——整条光是名字，或正文末尾缀了张图（「揍谁呀… surr_投降」），
+  // 都转成真图、正文照常留着发，别让用户看到文件名。已经有 sticker / voice 的不重复转。
   // 自拍名不转：send_selfie 的随机挑选 + 「自拍只给号主」的闸不能绕。
   if (out.text && !out.sticker && !out.voice) {
     const echo = stickerEcho(out.text);
-    if (echo) { out.sticker = echo; out.text = ''; }
+    if (echo) { out.sticker = echo.name; out.text = echo.text; }
   }
   if (!free && !out.text && !out.sticker && !out.voice) out.text = '嗯？';
   return out;

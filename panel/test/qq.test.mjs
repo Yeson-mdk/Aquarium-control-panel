@@ -1819,20 +1819,35 @@ test('FAV 解析走 looseJson：字符串分、字段换序、截断尾巴都能
   assert.equal(fav.todayNet('47003'), 2, '被截断的 FAV JSON 靠 looseJson 补齐记对');
 });
 
-test('表情包复读兜底：模型吐裸文件名/历史标记时转成真图，正常聊天不误伤', async () => {
+test('表情包复读兜底：模型吐裸文件名/历史标记/正文末尾缀标记时转成真图，正常聊天不误伤', async () => {
   const echo = brain.stickerEcho;
-  assert.equal(echo('shy_害羞'), 'shy_害羞', '裸文件名');
-  assert.equal(echo('[发了表情包] shy_害羞'), 'shy_害羞', '历史标记复读（线上原样）');
-  assert.equal(echo('[表情包shy_害羞]'), 'shy_害羞', '输入侧摘要外壳');
-  assert.equal(echo(''), '', '空文本');
-  assert.equal(echo('我觉得 shy_害羞 那张挺好看'), '', '整条不是光文件名 → 正常聊天不误转');
-  assert.equal(echo('不存在的表情包_xyz'), '', '不存在的名字不转');
+  assert.deepEqual(echo('shy_害羞'), { name: 'shy_害羞', text: '' }, '裸文件名');
+  assert.deepEqual(echo('[发了表情包] shy_害羞'), { name: 'shy_害羞', text: '' }, '历史标记复读（线上原样）');
+  assert.deepEqual(echo('[表情包shy_害羞]'), { name: 'shy_害羞', text: '' }, '输入侧摘要外壳');
+  assert.equal(echo(''), null, '空文本');
+  assert.equal(echo('我觉得 shy_害羞 那张挺好看'), null, '名字在句中、不是末尾独立标记 → 正常聊天不误转');
+  assert.equal(echo('不存在的表情包_xyz'), null, '不存在的名字不转');
+  assert.equal(echo('xxshy_害羞'), null, '名字粘在别的词里不切');
+
+  // 线上原样：正文末尾缀一张图，正文照留、标记转图
+  assert.deepEqual(echo('揍谁呀，我打不过的，尾巴一拍水花全溅自己身上 shy_害羞'),
+    { name: 'shy_害羞', text: '揍谁呀，我打不过的，尾巴一拍水花全溅自己身上' }, '正文末尾标记：正文与图分离');
+  assert.deepEqual(echo('来就来呗 shy_害羞。'),
+    { name: 'shy_害羞', text: '来就来呗' }, '标记后带句号也认');
+  assert.deepEqual(echo('好的\nshy_害羞'),
+    { name: 'shy_害羞', text: '好的' }, '标记独占一行也认');
 
   // 集成：模型只吐裸文件名时，reply 应给 sticker 而不是文字
   llmQueue.push({ content: 'shy_害羞' });
   const out = await brain.reply('我喜欢你们俩', { qq: '48001', peer: 'p:48001', name: '小丁', fids: [] });
   assert.equal(out.sticker, 'shy_害羞', '转成真图');
   assert.equal(out.text, '', '不再把文件名当话说出去');
+
+  // 集成：正文 + 末尾标记，正文留着发、图另发（对应线上那条 surr_投降）
+  llmQueue.push({ content: '揍谁呀，我打不过的，尾巴一拍水花全溅自己身上 shy_害羞' });
+  const out3 = await brain.reply('谁欺负你了', { qq: '48003', peer: 'p:48003', name: '小己', fids: [] });
+  assert.equal(out3.sticker, 'shy_害羞', '末尾标记转成图');
+  assert.equal(out3.text, '揍谁呀，我打不过的，尾巴一拍水花全溅自己身上', '正文原样保留，不丢话');
 
   // 模型正常调了工具时不动（已经有 sticker 就不重复转）
   llmQueue.push({ content: '嗯哼' });

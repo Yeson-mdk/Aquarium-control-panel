@@ -799,7 +799,7 @@ async function pageBotscore(main) {
 // ─── 手感调参：插嘴打分权重 / 限流 / 防抖，全部外置在 data/tuning.json，存了立刻生效 ───
 const TUNE_LABELS = {
   topic: [['base', '底分'], ['pass', '直接过闸 ≥'], ['review', '进仲裁 ≥'], ['image', '带图'], ['memeImg', '梗图分'], ['direct', '指向她'], ['asks', '带提问'], ['cmd', '短指令'], ['attack', '被点名怼'], ['continuation', '话题延续'], ['replyToMe', '回她的话'], ['replyWindowMin', '「回她的话」窗口（分）'], ['overlapBase', '接续起步'], ['overlapStep', '接续步进'], ['overlapCap', '接续封顶'], ['emotion', '纯情绪'], ['shortOnly', '短句无信息'], ['repeatText', '重复表述'], ['cooldownRepeat', '冷却期重复'], ['noInfo', '无新信息'], ['cooldownSec', '冷却期（秒）']],
-  gate: [['debounceGroupMs', '群防抖（毫秒）'], ['debouncePrivateMs', '私聊防抖（毫秒）'], ['userRateWindowMin', '限流窗口（分钟）'], ['userRateMax', '窗口内最多回（次）'], ['herRateWindowMin', '她的熔断窗口（分钟）'], ['herRateMax', '窗口内她最多自由插嘴（句）']],
+  gate: [['debounceGroupMs', '群防抖（毫秒）'], ['debouncePrivateMs', '私聊防抖（毫秒）'], ['jitterAmplitude', '抖动幅度（±比例 0~1）'], ['jitterFrequency', '抖动频率（0~1，0=关）'], ['jitterMinMs', '抖动范围下限（毫秒）'], ['jitterMaxMs', '抖动范围上限（毫秒）'], ['userRateWindowMin', '限流窗口（分钟）'], ['userRateMax', '窗口内最多回（次）'], ['herRateWindowMin', '她的熔断窗口（分钟）'], ['herRateMax', '窗口内她最多自由插嘴（句）']],
   fav: [['msgMax', '单条消息上限（±分）'], ['dayMax', '单日净分上限'], ['amp', '当天情绪放大倍数'], ['minDays', '老朋友α下限（天）'], ['lo', '好感下界'], ['hi', '好感上界'], ['decayEveryDays', '淡忘间隔（天）'], ['decayPer', '每次淡几分'], ['decayMax', '断太久一次最多淡'], ['keepDays', '走势留多少天']],
   ctx: [['days', '聊天原文带几天（1~30）']],
   sticker: [['ownerEvery', '号主私聊几条配一图'], ['friendEvery', '好友私聊几条配一图'], ['groupEvery', '群聊几条配一图']],
@@ -828,7 +828,7 @@ async function pageTuning(main) {
   const render = (cur, defaults) => {
     $('#tuningGrid').innerHTML = Object.entries(TUNE_LABELS).map(([sec, items]) =>
       `<div class="wide" style="font-weight:700;font-size:12px;color:var(--muted);padding-top:8px">${TUNE_SEC_TITLE[sec] || sec}</div>` +
-      items.map(([k, label]) => `<div><label class="f">${label}</label><input type="number" step="0.1" data-tune="${sec}.${k}" value="${cur[sec][k]}" autocomplete="off"></div>`).join('')
+      items.map(([k, label]) => `<div><label class="f">${label}</label><input type="number" step="any" data-tune="${sec}.${k}" value="${cur[sec][k]}" autocomplete="off"></div>`).join('')
     ).join('');
     const diff = [];
     for (const sec of Object.keys(defaults)) for (const [k, d] of Object.entries(defaults[sec])) if (cur[sec][k] !== d) diff.push(`${TUNE_LABELS[sec]?.find(([kk]) => kk === k)?.[1] || `${sec}.${k}`}：${d} → ${cur[sec][k]}`);
