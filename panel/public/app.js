@@ -448,6 +448,8 @@ async function pageMemory(main) {
             <button class="btn-mini friend-del" data-qq="${esc(f.qq || '')}" title="删掉这个人的全部数据（不可恢复）">删掉这个人</button>
           </div></li>`;
         }).join('')}</ul>` : '<div class="empty">还没认识谁，去群里聊聊或有人私聊她之后，每晚整理会建档</div>'}`;
+      // 绑定必须在渲染之后、且在 renderTab 内部：切 tab 重渲染会生成新按钮，外面绑一次等于没绑
+      $$('.friend-del', card).forEach((b) => (b.onclick = () => deleteFriendFlow(b.dataset.qq, renderTab)));
     } else {
       card.innerHTML = `<div class="card-h"><h2>她自己的</h2><span class="small muted">日子 = 经历 · 想法 = 洞察与内心 · 印象·日结 = 压缩层 · 档案 = 淡忘的原文</span></div>
         <div id="memPageList"></div>`;
@@ -455,7 +457,6 @@ async function pageMemory(main) {
     }
   };
   $$('#memSeg button', main).forEach((b) => (b.onclick = () => { S.memTab = b.dataset.v; $$('#memSeg button', main).forEach((x) => x.classList.toggle('on', x === b)); renderTab(); }));
-  $$('.friend-del', main).forEach((b) => (b.onclick = () => deleteFriendFlow(b.dataset.qq, renderTab)));
   renderTab();
 }
 
@@ -759,7 +760,7 @@ function bsRow(x, marked) {
 }
 async function pageBotscore(main) {
   const F = (S.bsF ||= { group: '', days: 30 });
-  main.innerHTML = head('谁像bot', '从群聊记录算的「像脚本/养鱼号程度」：两套分并排（新的抓养鱼号——变体话术、自说自话、引流词、卡片链接；旧的抓链式脚本），只出怀疑名单不下判决，盖章靠你翻聊天记录。拉黑进的就是「机器人名单」——那人只有 @ 她、叫她名字、点她干活/怼她，她才接话') +
+  main.innerHTML = head('谁像bot', '从群聊记录算的「像脚本/养鱼号程度」：两套分并排（新的抓养鱼号——变体话术、自说自话、引流词、卡片链接；旧的抓链式脚本），只出怀疑名单不下判决，盖章靠你翻聊天记录。拉黑进的就是「机器人名单」——那人只有在群里 @ 她，她才接话；叫名字、短指令、怼她都不接') +
     `<div class="card">
       <div class="filters">
         <div class="seg" id="bsGroup"><span class="empty" style="padding:4px 10px">加载中…</span></div>
@@ -1063,7 +1064,7 @@ async function pageAutopilot(main) {
           ${sel('qq.audience', '跟谁聊', [['owner', '只认号主（别人不理，群不看）'], ['public', '公共模式（好友私聊都聊，群里被@才回）']])}
           ${tog('qq.groupAt', '群里被@时回话', '公共模式：有人@她才接话（关掉后群里@了也不吭声）')}
           ${tog('qq.groupFree', '群里没@也让她插嘴', '开了她会看大家聊天，想搭腔就搭一句，跟得上连续对话；要不要插、插多密全由她自己定（活跃群会增加模型调用量）')}
-          <div><label class="f">机器人名单</label><input data-path="qq.botQQs" value="${esc(Array.isArray(c.qq.botQQs) ? c.qq.botQQs.join(', ') : c.qq.botQQs || '')}" placeholder="群里其他机器人的 QQ，逗号隔开" autocomplete="off"><div class="hint">名单里的人发消息，只有 @ 她、叫她名字、点她干活/怼她才接——几个模型在群里互相对话刷屏就是这么断掉的</div></div>
+          <div><label class="f">机器人名单</label><input data-path="qq.botQQs" value="${esc(Array.isArray(c.qq.botQQs) ? c.qq.botQQs.join(', ') : c.qq.botQQs || '')}" placeholder="群里其他机器人的 QQ，逗号隔开" autocomplete="off"><div class="hint">名单里的人只有在群里 @ 她才会接；叫名字、短指令、怼她都不接——几个模型在群里互相对话刷屏就是这么断掉的</div></div>
           <div><label class="f">聊天模型</label><input data-path="qq.model" value="${esc(c.qq.model || '')}" placeholder="留空 = 跟主模型同款" autocomplete="off"><div class="hint">只管她开口回话用的模型（私聊、被@、插嘴都算），想聊天用好模型、总结打分日记这些后台活继续用便宜主模型，就填这里。留空＝跟主模型一样</div></div>
           <div><label class="f">备用聊天模型</label><input data-path="qq.modelFallback" value="${esc(c.qq.modelFallback || '')}" placeholder="留空 = 不降档" autocomplete="off"><div class="hint">聊天主模型的 Key 失效、模型名/地址写错、余额不足时，自动换这个模型回话一次（会提醒你，6 小时不重复）。429/网络抖动不用它——主模型自己会重试。留空＝不降档</div></div>
           <div><label class="f">插嘴仲裁模型</label><input data-path="qq.reviewModel" value="${esc(c.qq.reviewModel || '')}" placeholder="deepseek-chat，留空 = 不仲裁" autocomplete="off"><div class="hint">插嘴打分拿不准的消息（2.8~4.8 分）先让这个便宜模型问一句「接不接」，说「不接」才拦下；留空就全放行。走主模型接口的 key，DeepSeek 官方填 deepseek-chat 就行</div><div class="row" style="margin-top:6px"><button class="btn sm" id="reviewTest">测试仲裁</button><span class="small muted" id="reviewMsg"></span></div></div>
@@ -1988,13 +1989,13 @@ async function pageReview(main) {
       ? `${pendingAps.length ? `<div class="tl-day">待执行</div><ul class="tl queue-list">${pendingAps.map((a) => apptRow(a)).join('')}</ul>` : ''}${firedAps.length ? `<div class="tl-day">已执行</div><ul class="tl queue-list">${firedAps.map((a) => apptRow(a, true)).join('')}</ul>` : ''}`
       : '<div class="empty">还没有定时任务</div>';
     switchQueue(queueTab);
-    $$('[data-cancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks/cancel', { id: b.dataset.cancel }); loadTasks(); })));
-    $$('[data-acancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/appointments/cancel', { id: b.dataset.acancel }); loadTasks(); })));
+    $$('#taskPane [data-cancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks/cancel', { id: b.dataset.cancel }); loadTasks(); })));
+    $$('#apptPane [data-acancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/appointments/cancel', { id: b.dataset.acancel }); loadTasks(); })));
     // 面板在做的活 + 约定栏正在看的视频：隔几秒刷新一下进度
     clearTimeout(S.taskTimer);
-    const busy = tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')
+    const hasRunningWork = tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')
       || pendingAps.some((a) => a.status === 'in_progress');
-    if (busy) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
+    if (hasRunningWork) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
   };
 
   const executor = () => ($('#taskBot').checked ? 'bot' : 'panel');

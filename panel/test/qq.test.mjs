@@ -1373,40 +1373,45 @@ test('自由插嘴的好感：单人批次她开口才记，多人混说和装�
   assert.equal(fav.todayNet('40003'), 1, '私聊照旧记分');
 });
 
-test('机器人名单和她自己的熔断：模型互刷断得掉，点名照接', async () => {
-  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, audience: 'public', groupFree: true, botQQs: '30001' } });
+test('机器人名单：只有 @ 才接，叫名字/短指令/怼她都不接（2026-11-19 号主改）', async () => {
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, audience: 'public', groupAt: true, groupFree: true, botQQs: '30001' } });
   const { writeTuning, resetTuning } = await import('../qq/tuning.mjs');
-  writeTuning({ gate: { userRateMax: 99, herRateMax: 2, herRateWindowMin: 3 } }); // 按人限流放开，专测她自己的熔断
+  writeTuning({ gate: { debounceGroupMs: 30, userRateMax: 99, herRateMax: 99, herRateWindowMin: 3 } }); // 限流放开，专测名单口径
   globalThis.WebSocket = FakeWS;
   const qq = await import('../qq/index.mjs');
   qq.start();
   await sleep(30);
   const ws = FakeWS.last;
+  const botMsg = (text, at = false) => ({
+    post_type: 'message', message_type: 'group', group_id: 611, user_id: 30001, self_id: 42,
+    sender: { nickname: '猫猫鱼' },
+    message: at ? [{ type: 'at', data: { qq: '42' } }, { type: 'text', data: { text } }] : [{ type: 'text', data: { text } }],
+  });
   try {
-    // 名单里的机器人聊闲天（分数够过闸）：不接
-    const n0 = llmCalls.length;
-    llmQueue.push({ content: '不接的备胎' });
-    ws.push({ post_type: 'message', message_type: 'group', group_id: 611, user_id: 30001, self_id: 42, sender: { nickname: '猫猫鱼' }, message: [{ type: 'text', data: { text: '催什么，唱得慢才不跑调' } }] });
-    await sleep(3200);
-    assert.equal(llmCalls.length, n0, '机器人名单里的人闲聊：不叫她');
-    // 但机器人消息里叫她名字：必须接
-    llmQueue.push({ content: '叫我干嘛' });
-    ws.push({ post_type: 'message', message_type: 'group', group_id: 611, user_id: 30001, self_id: 42, sender: { nickname: '猫猫鱼' }, message: [{ type: 'text', data: { text: '问一下鲸鲸，你主人是谁' } }] });
-    await sleep(3200);
-    assert.ok(llmCalls.length > n0, '机器人消息里叫她名字：照接');
-    // 她自己的熔断：真人（不在名单）闲聊，第 3 句起她歇会儿（herRateMax=2）
-    const n1 = llmCalls.length;
-    for (let i = 0; i < 3; i++) {
-      llmQueue.push({ content: '嗯嗯' });
-      ws.push({ post_type: 'message', message_type: 'group', group_id: 612, user_id: 30003, self_id: 42, sender: { nickname: '路人' }, message: [{ type: 'text', data: { text: `第${i}句：今天中午吃什么好呢` } }] });
-      await sleep(3200);
+    for (const [what, text] of [
+      ['闲聊', '催什么，唱得慢才不跑调'],
+      ['叫名字', '问一下鲸鲸，你主人是谁'],
+      ['短指令', '唱'],
+      ['怼她', '蠢鱼出来'],
+    ]) {
+      const n = llmCalls.length;
+      llmQueue.push({ content: '不该被调用' });
+      ws.push(botMsg(text));
+      await sleep(300);
+      assert.equal(llmCalls.length, n, `机器人名单里的人${what}：不叫她`);
+      llmQueue.length = 0; // 被拦下的消息不会消费假回复，清干净别漏给后面的测试
     }
-    assert.equal(llmCalls.length - n1, 2, '头两句照接，第三句熔断歇一会儿');
+    // 只有真 @ 她才接
+    const n = llmCalls.length;
+    llmQueue.push({ content: '叫我干嘛' });
+    ws.push(botMsg('问一下鲸鲸，你主人是谁', true));
+    await sleep(300);
+    assert.ok(llmCalls.length > n, '机器人名单里的人 @ 她：照接');
   } finally {
     qq.stop();
-    llmQueue.length = 0; // 被拦下的消息不会消费队列里的假回复，清干净别漏给后面的测试
+    llmQueue.length = 0;
     resetTuning();
-    store.writeConfig({ qq: { groupFree: false, botQQs: '' } });
+    store.writeConfig({ qq: { groupAt: true, groupFree: false, botQQs: '' } });
   }
 });
 

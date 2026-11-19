@@ -204,6 +204,15 @@ async function onMessage(ev) {
     const wantAt = at && cfg.groupAt !== false;
     const wantFree = !at && !!cfg.groupFree;
     if (!wantAt && !wantFree) return;
+    // 机器人名单：群里其他模型的消息有问有答、句句像「该接的」，权重怎么调都会互刷。
+    // 2026-11-19 号主改口径：名单里的人只有 @ 她才接；叫名字 / 短指令 / 怼她都不再放行。
+    // 提前到打分前拦，连 review 仲裁的模型调用都不烧。
+    const botList = String(Array.isArray(cfg.botQQs) ? cfg.botQQs.join(',') : cfg.botQQs || '').split(/[,，\s]+/).filter(Boolean).map(String);
+    const isBot = botList.includes(String(ev.user_id));
+    if (isBot && !at) {
+      try { logAction({ kind: 'gate', source: 'auto', detail: `🤖 机器人名单：${name || ev.user_id} 没 @ 她，不接「${text.slice(0, 30)}」`, meta: { verdict: '拦下', text: String(text || '').slice(0, 60), peer, who: name || String(ev.user_id), bot: true } }); } catch { /* 日志不挡正事 */ }
+      return;
+    }
     let decision = null; // 自由插嘴的打分结果：闸里用，下面的限流豁免也用（不走过闸就是 null）
     if (!at && cfg.groupFree) {
       decision = brain.topicScoreMessage(text, peer, !!imgs.length, metas);
@@ -220,17 +229,9 @@ async function onMessage(ev) {
       // 没配 / 模型没回话都照旧进池——这道闸只减误插嘴，不添装死
       if (decision.status === 'review' && !(await brain.reviewJoin(text, peer))) { logGate('仲裁拦下', '· 仲裁说不接 '); return; }
       logGate(decision.status === 'review' ? '仲裁放行' : '过闸');
-      // 机器人名单：群里其他模型的消息有问有答、句句像「该接的」，权重怎么调都会互刷。
-      // 名单里的 QQ 只有叫她名字、点她干活、怼她（@ 在上面已经单独处理）才接，普通接话一律不接
-      const botList = String(Array.isArray(cfg.botQQs) ? cfg.botQQs.join(',') : cfg.botQQs || '').split(/[,，\s]+/).filter(Boolean).map(String);
-      const isBot = botList.includes(String(ev.user_id));
-      if (isBot && !(decision.reasons || []).some((r) => /指向你|被点名怼|短指令/.test(r))) {
-        try { logAction({ kind: 'gate', source: 'auto', detail: `🤖 机器人消息只接点名：${name || ev.user_id} 的这句不接「${text.slice(0, 30)}」`, meta: { verdict: '拦下', text: String(text || '').slice(0, 60), peer, who: name || String(ev.user_id), bot: true } }); } catch { /* 日志不挡正事 */ }
-        return;
-      }
     }
     // （她自己的熔断不在收条时判了：那会儿还不知道她会不会 SKIP，热群里光看不说也会把名额耗光。
-    //  挪到 flush 里出手前判、真说了才计数——见 flush()。防两个模型对刷的用途不变，名单漏网也兜得住）
+    //  挪到 flush 里出手前判、真说了才计数——见 flush()。名单里已提前硬拦，这道兜的是名单外模型的互刷）
     // 按人限流（独立于打分的硬兜底，防「每 30 秒一句蠢鱼」的钓鱼刷屏）：同一人在窗口期内
     // 只能让她自由插嘴这么多次；@ 她的、私聊、点名叫她的（指向你/被点名怼/短指令）不受限——
     // 那是点名不是刷屏，限流把「鲸鲸！」「不理我了」这种连着叫她的也拦掉，就成了当面装死

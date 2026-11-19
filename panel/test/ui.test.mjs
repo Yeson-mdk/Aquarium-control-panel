@@ -23,3 +23,9 @@ test('UI：app.js 里每个 switch 开关都包在 label 里（不包=点不到�
   }
   assert.ok(count >= 3, `应该至少有 3 个开关（总览总开关/tog/设置页总开关），实际只找到 ${count} 个——模板改了的话测试跟着改`);
 });
+
+test('UI：不能用局部 busy 变量遮蔽 busy(btn, fn)，否则任务箱/约定取消按钮点了没反应', () => {
+  assert.match(src, /async function busy\(btn, fn\)/, 'busy() 按钮助手应该还在');
+  assert.doesNotMatch(src, /\b(?:const|let|var)\s+busy\b/,
+    'app.js 里出现了局部 busy 绑定；点击处理器里的 busy(btn, fn) 会变成把布尔值当函数调用，取消按钮会静默失效');
+});

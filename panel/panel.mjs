@@ -214,7 +214,7 @@ const routes = {
     return purge.purgePerson(qq);
   },
   // 谁像bot：纯读的怀疑榜单（规则加分制，不是判决）+ 一键进/出机器人名单。
-  // 名单的行为在 qq/index.mjs（只有 @ 她、叫她名字、点她干活/怼她才接），这里只管名单本身。
+  // 名单的行为在 qq/index.mjs（名单里的人只有群聊 @ 她才接），这里只管名单本身。
   // 检测不自动跑：打开页面只拿群列表和名单，rows 要带 scan=1（点了「检测」按钮）才算——数据是实时的，算分交给号主手动触发
   'GET /api/botscore': async (q) => {
     const group = q.get('group');
@@ -258,8 +258,8 @@ const routes = {
   'GET /api/actions': async (q) => {
     let list = readActions();
     const kind = q.get('kind'); const source = q.get('source'); const date = q.get('date'); const s = q.get('q');
-    if (kind) { const ks = kind.split(','); list = list.filter((a) => ks.includes(a.kind) || (ks.includes('gate') && a.kind === 'qq' && /插嘴/.test(a.detail || ''))); } // gate 单独板块：旧记录混在 qq 类里，按 🎯 前缀捞回来
-    else list = list.filter((a) => a.kind !== 'gate' && !(a.kind === 'qq' && /插嘴|连发熔断|机器人消息只接点名/.test(a.detail || '')));
+    if (kind) { const ks = kind.split(','); list = list.filter((a) => ks.includes(a.kind) || (ks.includes('gate') && a.kind === 'qq' && /插嘴|机器人消息只接点名|机器人名单：/.test(a.detail || ''))); } // gate 单独板块：旧记录混在 qq 类里，按 🎯 前缀捞回来
+    else list = list.filter((a) => a.kind !== 'gate' && !(a.kind === 'qq' && /插嘴|连发熔断|机器人消息只接点名|机器人名单：/.test(a.detail || '')));
     if (source) list = list.filter((a) => a.source === source || (!a.source && source === 'panel'));
     if (date) list = list.filter((a) => localDate(new Date(a.ts)) === date);
     if (s) list = list.filter((a) => `${a.title} ${a.detail} ${a.target}`.includes(s));
