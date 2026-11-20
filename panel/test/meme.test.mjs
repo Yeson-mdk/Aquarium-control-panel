@@ -79,7 +79,10 @@ test('memeText：没教过就是空的；教过的黑话给聊天提示带意思
 test('在线连不上 → 本地兜底；本地也没有 → 未收录 + 10 分钟不重查', async () => {
   globalThis.fetch = async () => { throw new Error('网络炸了'); };
   assert.match(await meme.lookup('说个本地梗'), /【梗百科】本地梗/);
-  assert.match(await meme.lookup('查无此词xyz'), /没有收录「查无此词xyz」/);
+  const miss = await meme.lookup('查无此词xyz');
+  assert.match(miss, /没有收录「查无此词xyz」/);
+  assert.match(miss, /按画面和上下文的意思直接接住他/, '只给正向动作：直接接意思');
+  assert.doesNotMatch(miss, /给你自己看的|别在回复里说|脑子里/, '不给元指令——教她审视自己输出反而诱发元自我检讨');
   let net = 0;
   globalThis.fetch = async () => { net++; throw new Error('网络炸了'); };
   await meme.lookup('查无此词xyz');

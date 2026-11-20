@@ -3,6 +3,8 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { deflateSync } from 'node:zlib';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // 最小合法 PNG（1×1 RGB）：给「梗图指纹库」用例用——FAKE_PNG 解不出 dHash，没法验证缓存
 const CRC_T = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c; } return t; })();
@@ -68,6 +70,7 @@ store.writeSecrets({ llmApiKey: 'test' });
 const { OneBot, readMessage, seg } = await import('../qq/onebot.mjs');
 const owner = await import('../qq/owner.mjs');
 const brain = await import('../qq/brain.mjs');
+const prompts = await import('../qq/prompts.mjs');
 const memeimg = await import('../memeimg.mjs');
 
 test('OneBot：连上拿到自己的号，收消息、发消息都对得上 echo', async () => {
@@ -100,6 +103,14 @@ test('persona：拿到性格和说话方式，不带 DSH 里跑命令的那些',
   // 2026-11-09 重写：接话示例撤了（例句会被复读）、字数条数配额改定性意图
   assert.doesNotMatch(p, /接话示例/);
   assert.doesNotMatch(p, /1~10 字|最多三条/, '数值配额会被当合规检查，写意图不写数值');
+  assert.match(p, /别把好几件不同的关心、感受塞进同一条里一起说/, '关心节制追加了「不堆砌多件事」的定性约束');
+  assert.match(p, /一次只说眼下这句，不攒着一起倒/, '说话方式追加了「想到好几件也不一次倒完」');
+});
+
+test('语音话术：send_voice 说明和号主私聊 HOW 都要求别把天气/叮嘱/碎感想堆进一条', () => {
+  const v = brain.toolDefs().find((t) => t.function.name === 'send_voice');
+  assert.match(v.function.description, /别把天气、几份叮嘱、碎感想一起塞进去/, '工具说明里有防堆砌约束');
+  assert.match(prompts.HOW, /语音里只说眼下最想说的那点/, '号主私聊 HOW 也提了一句');
 });
 
 test('tidyReply：去掉 markdown 和「已更新日志」的尾巴', () => {
@@ -600,7 +611,7 @@ test('群开关：@的开关关掉就不回；插嘴开了让模型自己定（S
   assert.ok(llmCalls.length > n2, '插过嘴后下一条没@的照样想（没有冷却）');
   assert.match(llmCalls.at(-1).messages.at(-1).content, /说了 1 句/, '把她这一小时说了几句端到眼前（自觉，不硬拦）');
   assert.ok(store.readActions().some((a) => a.kind === 'gate' && a.meta?.verdict === '没接' && /火锅走起/.test(a.meta?.text || '')), '过了裁决她 SKIP：也落一笔「没接」，号主看得到卡在哪');
-  assert.match(llmCalls.at(-1).messages.at(-1).content, /默认潜水/, '她上一句刚说完还没人接，这批默认潜水');
+  assert.match(llmCalls.at(-1).messages.at(-1).content, /照常往下聊就行/, '她上一句刚说完还没人接，引导也改成照常接、不再默认潜水');
   assert.equal(ws.sent.filter((x) => x.action === 'send_group_msg' && x.params.group_id === 555).length, 1, 'SKIP 就继续潜水');
   // 配置是落盘的：把这两个开关拨回默认，别污染后面的测试（它们默认 groupAt 开着）
   store.writeConfig({ qq: { groupAt: true, groupFree: false } });
@@ -719,6 +730,8 @@ test('拍一拍：唤醒她回头看上一条，不对拍一拍本身做反应�
   qq.start();
   await sleep(30);
   const ws = FakeWS.last;
+  // 先写一条「上一句」（当前时间），让时间闸判为够近——否则没上一句也能过闸，测不到主路径
+  owner.logChat({ from: 'owner', text: '刚才那句我还没接', peer: 'g:777', name: '小张' });
   llmQueue.push({ content: '好呀[FAV:{"d":0,"why":"闲聊"}]' });
   ws.push({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', group_id: 777, user_id: 20009, target_id: 42, self_id: 42 });
   await sleep(3200);
@@ -736,6 +749,32 @@ test('拍一拍：唤醒她回头看上一条，不对拍一拍本身做反应�
   ws.push({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', group_id: 777, user_id: 20009, target_id: 42, self_id: 42 });
   await sleep(800);
   assert.equal(llmCalls.length, n1, '连拍不刷屏');
+  qq.stop();
+});
+test('拍一拍时间闸：上一句距今太久就不回看、不调模型；关闸后照回', async () => {
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, audience: 'public', groupFree: false } });
+  const { writeTuning, resetTuning } = await import('../qq/tuning.mjs');
+  writeTuning({ gate: { pokeFreshSec: 60, pokeJitterRatio: 0, pokeFreshMinSec: 0, pokeFreshMaxSec: 0 } }); // 确定性 60 秒窗口
+  globalThis.WebSocket = FakeWS;
+  const qq = await import('../qq/index.mjs');
+  qq.start();
+  await sleep(30);
+  const ws = FakeWS.last;
+  // g:778 写一条 10 分钟前的「上一句」：远超 60 秒窗口
+  writeFileSync(join(store.DATA, 'qq-chat-g_778.jsonl'), JSON.stringify({ ts: new Date(Date.now() - 600_000).toISOString(), from: 'owner', text: '很久以前的一句', name: '旧人' }) + '\n');
+  const n0 = llmCalls.length;
+  ws.push({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', group_id: 778, user_id: 20019, target_id: 42, self_id: 42 });
+  await sleep(3200);
+  assert.equal(llmCalls.length, n0, '上一句隔太久：拍一拍不调模型');
+  assert.ok(store.readActions().some((a) => a.kind === 'gate' && a.meta?.verdict === '拍得太晚'), '落了一笔闸日志，号主看得到');
+  // 关掉时间闸（pokeFreshSec=0）：同样的久远上一句也照回（老行为）
+  writeTuning({ gate: { pokeFreshSec: 0 } });
+  writeFileSync(join(store.DATA, 'qq-chat-g_779.jsonl'), JSON.stringify({ ts: new Date(Date.now() - 600_000).toISOString(), from: 'owner', text: '很久以前的一句', name: '旧人' }) + '\n');
+  llmQueue.push({ content: '在呢' });
+  ws.push({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', group_id: 779, user_id: 20020, target_id: 42, self_id: 42 });
+  await sleep(3200);
+  assert.ok(llmCalls.length > n0, '关闸后照常回看');
+  resetTuning();
   qq.stop();
 });
 test('公共模式工具门禁：语音放行，号主专属的照样拦', async () => {
@@ -1320,6 +1359,7 @@ test('review 档仲裁：模型说不接才拦，说接/抽风都放行', async 
   const call = llmCalls.at(-1);
   assert.equal(call.model, 'deepseek-chat', '走配置里指定的仲裁模型');
   assert.ok(String(call.messages.at(-1).content).includes('刚收到的消息'), '把新消息端给模型了');
+  assert.doesNotMatch(String(call.messages[0].content), /潜水型群友/, '仲裁口径不再写「潜水型群友」，改拿不准就接');
   store.writeConfig({ qq: { reviewModel: '' } });
 });
 
@@ -1543,6 +1583,35 @@ test('汇报类消息里的 [TO:名字] 也剥掉换 @（学歌下好了那种 r
     await qq.sendText('[TO:谁谁] 就跟你说', 'report', 'owner');
     const pm = ws.sent.filter((x) => x.action === 'send_private_msg').at(-1).params.message;
     assert.equal(pm[0].data.text, '就跟你说', '私聊剥掉标记、不 @');
+  } finally {
+    qq.stop();
+  }
+});
+
+test('模型把 O 写成 0（[T0:名字]）也一样剥掉换 @：字形混淆不让标记漏网', async () => {
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, audience: 'public' } });
+  globalThis.WebSocket = FakeWS;
+  const qq = await import('../qq/index.mjs');
+  qq.start();
+  await sleep(30);
+  const ws = FakeWS.last;
+  try {
+    // 小零同学先进群说话建档，名字才对得上号
+    ws.push({ post_type: 'message', message_type: 'group', group_id: 601, user_id: 60001, self_id: 42, sender: { nickname: '小零同学' }, message: [{ type: 'text', data: { text: '我先说一句' } }] });
+    await sleep(200);
+    // deliver 路径：模型把 [TO:小零同学] 写成 [T0:小零同学]，照样换成 @
+    llmQueue.push({ content: '[T0:小零同学]词是你递的，怎么怪我' });
+    ws.push({ post_type: 'message', message_type: 'group', group_id: 601, user_id: 60002, self_id: 42, sender: { nickname: '路人甲' }, message: [{ type: 'at', data: { qq: '42' } }, { type: 'text', data: { text: ' 你说说他' } }] });
+    const until = async (fn, ms = 9000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await sleep(200); } return fn(); };
+    assert.ok(await until(() => ws.sent.some((x) => x.action === 'send_group_msg' && x.params.group_id === 601)), '她回了');
+    const msg = ws.sent.filter((x) => x.action === 'send_group_msg' && x.params.group_id === 601).at(-1).params.message;
+    assert.deepEqual(msg[0], { type: 'at', data: { qq: '60001' } }, 'T0 也认，照样 @ 小零同学');
+    assert.equal(msg[1].data.text, ' 词是你递的，怎么怪我', '标记剥掉，没原样发出去');
+    // report 路径：同样认 T0
+    await qq.sendText('[T0:小零同学] 下好了，听吧', 'report', 'g:601');
+    const msg2 = ws.sent.filter((x) => x.action === 'send_group_msg' && x.params.group_id === 601).at(-1).params.message;
+    assert.deepEqual(msg2[0], { type: 'at', data: { qq: '60001' } }, 'report 路径 T0 也换 @');
+    assert.equal(msg2[1].data.text, ' 下好了，听吧', '标记剥掉');
   } finally {
     qq.stop();
   }

@@ -93,7 +93,7 @@ export function toolDefs() {
       en: { type: 'string', description: '一个英文小写词，比如 meng' }, zh: { type: 'string', description: '一两个中文字，比如 萌' },
       when: { type: 'string', description: '什么心情或场合用这张，一句话 20 字内。写宽一点，像「委屈想撒娇的时候」——别写成「只有被问到X才用」的窄触发，那样你日常永远轮不上它；以后你挑表情包看的就是它' },
     }, ['en', 'zh', 'when']),
-    fn('send_voice', '发一条语音（跟你的回复一起发）。text 是要说的话，像说话，30 秒内，不要表情符号。语音本身就是那条消息：说了语音，回复文字里就别再把同样的话打一遍（写了也一样，程序只发语音）', {
+    fn('send_voice', '发一条语音（跟你的回复一起发）。text 是要说的话，像说话，30 秒内，不要表情符号。语音只说当下最想说的那点——别把天气、几份叮嘱、碎感想一起塞进去，想多说留到文字或下一轮。语音本身就是那条消息：说了语音，回复文字里就别再把同样的话打一遍（写了也一样，程序只发语音）', {
       text: { type: 'string' }, voice: { type: 'string', enum: VOICES, description: '默认 Meijia，偏温柔' },
     }, ['text']),
     fn('remember', '记住一件关于号主的事（以后每次聊天都会带着）。一句话、第三人称', {
@@ -117,7 +117,7 @@ export function toolDefs() {
     fn('research', '联网查资料（她自己上网搜、看网页，答案是带来源的），查到了会让你自己告诉号主。要等十几秒到一分钟', {
       question: { type: 'string', description: '要查的问题，写清楚，带上时间地点这些' },
     }, ['question']),
-    fn('search_meme', '查网络梗、流行语、缩写、黑话是什么意思、怎么接（cnmeme.wiki 梗百科，查不到用本地词库兜底）。梗图上的词一律先查再接，聊天里没把握的词也查，别硬猜；查到优先照「怎么用」接梗，别当词典念；查不到就说不知道，别编', {
+    fn('search_meme', '查网络梗、流行语、缩写、黑话是什么意思、怎么接（cnmeme.wiki 梗百科，查不到用本地词库兜底）。梗图上的词一律先查再接，聊天里没把握的词也查，别硬猜；查到优先照「怎么用」接梗，别当词典念；查不到就按意思直接接住他，猜个大概就含糊带过', {
       query: { type: 'string', description: '要查的词，尽量短（8 字内），比如「大水理论」' },
     }, ['query']),
     fn('learn_slang', '号主教了你一个词（黑话 / 梗 / 绰号），记进小词库，以后查得到', {
@@ -530,7 +530,7 @@ export async function runTool(name, args, out) {
         const via = r.startsWith('【群内黑话】') ? '群内黑话' : r.includes('没有收录') ? '没收录' : r.includes('（本地词库）') ? '本地词库兜底' : '在线查到';
         try { logAction({ kind: 'qq', source: 'bot', detail: `📖 梗百科「${q.slice(0, 16)}」：${via}` }); } catch { /* 日志不挡正事 */ }
         return r;
-      } catch (e) { console.error('[meme] 查询', e.message); return '梗词库暂时查不了，先按字面理解或说不知道'; }
+      } catch (e) { console.error('[meme] 查询', e.message); return '梗词库暂时查不了，按意思直接接住他，猜不准就含糊带过'; }
     }
     case 'learn_slang': {
       const r = meme.addTerm(a.name, a.meaning, '号主');

@@ -17,6 +17,7 @@ import * as owner from './owner.mjs';
 import { tuning } from './tuning.mjs';
 import { jitterDelay, gateJitter } from './jitter.mjs';
 import { decideRate, calmMs, exemptKey } from './rate.mjs';
+import { pokeFresh, pokeWindowMs, lastRealChatTs } from './poke-fresh.mjs';
 import * as memory from '../memory.mjs';
 import * as recallCheck from '../recall-check.mjs';
 import * as fav from '../fav.mjs';
@@ -124,6 +125,20 @@ async function onRequest(ev) {
 // ─── 拍一拍（notify.poke） ────────────────────────────────────
 const pokeLast = new Map(); // 同一个人连拍：60 秒内只当一次，免得被人拍着玩刷屏
 const friendName = (qq) => friends.readFriends().friends?.[String(qq)]?.name || String(qq);
+/** 拍一拍时间闸：上一句话距今太久就当随手戳一下，不回看旧账。返回 true=该忽略。
+ *  取上一句要在 queue() 写「拍了拍」占位符之前——所以调用点必须排在入队前。 */
+function pokeTooStale(peer, who) {
+  const g = tuning().gate;
+  const windowMs = pokeWindowMs(g);
+  if (!(windowMs > 0)) return false; // 闸关着：老行为，照回
+  const lastTs = lastRealChatTs(owner.recentChat(12, Date.now(), peer));
+  const d = pokeFresh({ lastTs, now: Date.now(), windowMs });
+  if (!d.allow) {
+    try { logAction({ kind: 'gate', source: 'auto', detail: `🫵 拍一拍没回：上一句距今 ${Math.round(d.gapMs / 1000)} 秒，超过这次的 ${Math.round(d.windowMs / 1000)} 秒窗口`, meta: { verdict: '拍得太晚', peer, who, gapMs: d.gapMs, windowMs: d.windowMs } }); } catch { /* 日志不挡正事 */ }
+    return true;
+  }
+  return false;
+}
 /** 拍到她身上就当她被 @ 了一下，让她接一嘴；拍别人的只在群日志里记一笔当背景。私聊拍一拍也认（号主随时，好友要公共模式） */
 async function onNotice(ev) {
   if (ev.post_type !== 'notice' || ev.notice_type !== 'notify' || ev.sub_type !== 'poke') return;
@@ -152,16 +167,19 @@ async function onNotice(ev) {
     if (!toMe) { owner.logChat({ from: 'owner', text: `（${name}拍了拍${friendName(ev.target_id)}）`, peer, name }); return; } // 拍别人：记一笔就行，不接茬
     const key = `${peer}:${from}`;
     if (Date.now() - (pokeLast.get(key) || 0) < 60_000) return;
+    if (pokeTooStale(peer, name)) return; // 上一句太久没接：不回看旧账
     pokeLast.set(key, Date.now());
     queue(peer, name, ev.user_id);
     return;
   }
   if (!toMe) return;
   if (!pub && from !== String(cfg.ownerQQ)) return; // 只认号主：别人拍也不理
+  const dpeer = from === String(cfg.ownerQQ) ? 'owner' : 'p:' + from;
   const key = `poke:${from}`;
   if (Date.now() - (pokeLast.get(key) || 0) < 60_000) return;
+  if (pokeTooStale(dpeer, from === String(cfg.ownerQQ) ? '号主' : friendName(from))) return;
   pokeLast.set(key, Date.now());
-  queue(from === String(cfg.ownerQQ) ? 'owner' : 'p:' + from, '', null);
+  queue(dpeer, '', null);
 }
 
 // ─── 收 ────────────────────────────────────────────────────
@@ -457,10 +475,11 @@ export async function singThenSay(task, say, deps = {}) {
 
 async function deliver(out, peer = 'owner') {
   // 她要指明回谁（回的不是刚说话的人）时会在开头缀 [TO:名字]：剥掉标记、换成真的 @ 段跟第一条一起发，
-  // 句子本身不用喊名字。私聊里标了就只剥掉；群里名字对不上人就当没标，裸发
+  // 句子本身不用喊名字。私聊里标了就只剥掉；群里名字对不上人就当没标，裸发。
+  // 模型偶尔把 O 写成 0（字形混淆，线上出过 [T0:...]）——T[O0] 两种都认，标记才剥得掉
   let at = '';
   let text = out.text;
-  const to = String(text || '').match(/^\s*\[TO:([^\]]+)\]\s*/);
+  const to = String(text || '').match(/^\s*\[T[O0]:([^\]]+)\]\s*/);
   if (to) {
     text = String(text).slice(to[0].length);
     if (peer.startsWith('g:')) at = findGroupMember(peer, to[1]) || '';
@@ -558,11 +577,11 @@ function doSticker(x) {
 export async function sendText(text, kind, peer = 'owner', atQq = '') {
   if (!bot) throw new Error('QQ 小号没开');
   // 模型在汇报类消息里也可能带 [TO:名字]（learnReply 那些继承了群聊规矩），在这儿统一剥掉换 @，
-  // 免得标记原样发出去；deliver() 那份转换管不到这条路
+  // 免得标记原样发出去；deliver() 那份转换管不到这条路。T[O0]：模型偶发把 O 写成 0，同样要剥
   // atQq：调用方已经知道要 @ 谁时（比如群里问的号主，查完 @ 回他）直接传 QQ 号，不走名字反查
   let at = atQq && peer.startsWith('g:') ? String(atQq) : '';
   let body = String(text || '');
-  const to = body.match(/^\s*\[TO:([^\]]+)\]\s*/);
+  const to = body.match(/^\s*\[T[O0]:([^\]]+)\]\s*/);
   if (to) {
     body = body.slice(to[0].length);
     if (peer.startsWith('g:') && !at) at = findGroupMember(peer, to[1]) || '';

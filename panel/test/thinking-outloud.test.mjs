@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './_env.mjs';
-import { isThinkingOutLoud, tidyReply } from '../qq/brain.mjs';
+import { isThinkingOutLoud, isMetaSelfTalk, tidyReply, punHint, toolDefs } from '../qq/brain.mjs';
 
 test('思考泄漏 1：线上原句——自述+末尾 SKIP（中文句号）该吞', () => {
   const line = '他还在“？”我，我上句接的是存不存图片那事，已经翻篇了。这会儿没什么新的，SKIP。';
@@ -51,4 +51,46 @@ test('占位标记复读 2：不误伤——正常讲话里带括号/方括号',
   assert.equal(tidyReply('你说[笑哭]那个，我笑死了'), '你说[笑哭]那个，我笑死了', '话里带方括号照发');
   assert.equal(tidyReply('他@了你（真的），你去看看'), '他@了你（真的），你去看看', '话里带括号照发');
   assert.equal(tidyReply('来啦 [卷心菜] 哈哈'), '来啦 [卷心菜] 哈哈', '标记不在整行、有真实内容 → 保留');
+});
+
+test('复述抑制 1：带字梗图的生成点提示给正向动作、不教她审视自己的输出', () => {
+  const h = punHint('[图片：图上文字：WHALEDeepSeek；蓝发少女身穿印有鲸鱼元素的卫衣，比出爱心手势。]');
+  assert.match(h, /别把画面描述原样念一遍/);
+  assert.match(h, /看懂了就直接接意思/);
+  assert.doesNotMatch(h, /脑子里|别在话里交代/, '元指令会诱发「这回复什么格式」式自我审视');
+});
+
+test('复述抑制 2：search_meme 工具说明只给正向动作', () => {
+  const t = toolDefs().find((x) => x.function.name === 'search_meme');
+  assert.ok(t, '工具单里有 search_meme');
+  assert.match(t.function.description, /查不到就按意思直接接住他/);
+  assert.doesNotMatch(t.function.description, /说出口|给你自己看的/);
+});
+
+test('元自我审视 1：线上原句整段吞掉，不发出去', () => {
+  const line = '这回复我发出去时是这个格式吗？不太确定。要不要我换成更自然点的话？';
+  assert.equal(isMetaSelfTalk(line), true);
+  assert.equal(tidyReply(line), '', 'tidyReply 出路口也要清掉');
+});
+
+test('元自我审视 2：同一条回复里先是正文、后是自我审视——只删审视那行，正文照发', () => {
+  const out = tidyReply('大清早能听见你这声要早安，我心里还挺乐呵的。\n这回复我发出去时是这个格式吗？不太确定。要不要我换成更自然点的话？');
+  assert.equal(out, '大清早能听见你这声要早安，我心里还挺乐呵的。');
+});
+
+test('元自我审视 3：变体都认——格式 / 发出去 / 更自然点的话', () => {
+  for (const t of [
+    '这条回复发出去是什么格式？',
+    '我刚说的那句是不是太硬了，要不要换成更自然点的话',
+    '我写出去的东西自然吗，不太确定',
+  ]) assert.equal(isMetaSelfTalk(t), true, `该吞：${t}`);
+});
+
+test('元自我审视 4：不误伤——正常聊天里的「换说法」「合不合适」照发', () => {
+  for (const t of [
+    '好呀，我换个说法跟你讲',
+    '我刚才那句说得不好，重来一遍哈',
+    '这样回他合不合适呀',
+    '你觉得我这么说行不行',
+  ]) assert.equal(isMetaSelfTalk(t), false, `不该吞：${t}`);
 });

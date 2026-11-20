@@ -165,7 +165,7 @@ export async function lookup(query) {
   if (!q) return '要查的词是空的';
   const hit = findTerm(q);
   if (hit) { const [n, e] = hit; return `【群内黑话】${n}\n${e.meaning}\n（${e.by} 教的）`; }
-  if ((miss.get(q) || 0) > Date.now()) return `词库里没有「${q}」（刚查过，没有）`;
+  if ((miss.get(q) || 0) > Date.now()) return `词库里没有收录「${q}」（刚查过，还是没有）。按画面和上下文的意思直接接住他，猜不准就含糊带过`;
 
   // ① 在线：搜索 + 详情（详情落盘缓存）。只认「标题等于查询」或「完整标题出现在查询里」
   let online = null;
@@ -185,7 +185,7 @@ export async function lookup(query) {
   if (lt) return localEntry(lt, q);
 
   miss.set(q, Date.now() + MISS_TTL);
-  return `词库里没有收录「${q}」。可能是新梗、自造词或拼写不对，不确定就老实说不知道，别编`;
+  return `词库里没有收录「${q}」。可能是新梗、自造词或拼写不对。按画面和上下文的意思直接接住他，猜不准就含糊带过`;
 }
 
 /**
