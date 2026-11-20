@@ -1328,6 +1328,36 @@ test('群自由插嘴打分：该接的接得上，不该接的压得下', () =>
   assert.equal(brain.topicScoreMessage('哈哈哈哈哈哈', 'g:ts5').status, 'skip');
 });
 
+test('群自由插嘴打分：短的新事件陈述能进仲裁（开新话题第一声）', () => {
+  // 「我猫生病了」「我搬家了」这类短句既没 CUE 词也没共词，以前同时吃 shortOnly 和 noInfo
+  // 双重扣分掉到 0.4 被硬拦——现在给一条正向通道进 review，交给仲裁拿主意
+  for (const [i, t] of ['我猫今天生病了', '我搬家了', '我手机丢了', '我分手了'].entries()) {
+    const r = brain.topicScoreMessage(t, `g:fresh-${i}`);
+    assert.equal(r.status, 'review', `${t} 应进仲裁，不该硬拦`);
+    assert.ok(r.reasons.includes('新事件陈述'), `${t} 带新事件标志`);
+  }
+  // 没其它正向信号才生效：已有 CUE 词的不叠加，也不会推过 pass 线
+  const withCue = brain.topicScoreMessage('我昨天买了个新电脑', 'g:fresh-cue');
+  assert.ok(!withCue.reasons.includes('新事件陈述'), '已有话题延续的不叠加新事件分');
+  assert.ok(withCue.status !== 'pass', '不越过 pass 直接过闸');
+  // 不误伤：纯情绪、没踩中事件词的短句、第三人称叙事照旧拦
+  assert.equal(brain.topicScoreMessage('都想', 'g:fresh-no1').status, 'skip');
+  assert.equal(brain.topicScoreMessage('我想你了', 'g:fresh-no2').status, 'skip', '没踩中事件词表不算');
+  assert.equal(brain.topicScoreMessage('他搬家了', 'g:fresh-no3').status, 'skip', '第三人称不是自述');
+});
+
+test('群自由插嘴打分：新事件通道设 0 可关', async () => {
+  const { writeTuning, resetTuning } = await import('../qq/tuning.mjs');
+  try {
+    writeTuning({ topic: { freshEvent: 0 } });
+    const r = brain.topicScoreMessage('我猫今天生病了', 'g:fresh-off');
+    assert.equal(r.status, 'skip', '关掉后回到原来的硬拦行为');
+    assert.ok(!r.reasons.includes('新事件陈述'));
+  } finally {
+    resetTuning();
+  }
+});
+
 test('群自由插嘴打分：别人回她的话不算噪音', () => {
   const peer = 'g:ts6';
   owner.logChat({ from: 'her', text: '我困了，先眯会儿', peer });

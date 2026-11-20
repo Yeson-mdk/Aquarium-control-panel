@@ -241,7 +241,16 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   const attackCue = /[蠢笨傻呆坏懒憨]鱼|(?:只会)?找茬|破防|骂谁/.test(clean); // 被拿外号点名嘲讽/激将：字再少也是在冲她来的，装死比回嘴更失礼。咸鱼/摸鱼/鱼香肉丝不含侮辱字+鱼的连排，不会误伤
   const continuationCue = CUE_RE.test(clean);
   const emotion = !replyingToMe && (/^(哈哈|啊这|笑死|离谱|牛啊|好家伙|神了|急了|哭了|好笑|好耶|草|qwq|x_x|orz|略略|太强了|这波|233)+$/i.test(clean) || (/(?:哈哈|啊这|笑死|离谱|神了|草|233|好家伙|急了|哭了)/i.test(clean) && clean.length <= 20 && !direct && !asks)); // 别人回她的话哪怕是纯哈哈哈也是接茬，不当噪音
-  const shortOnly = clean.length <= 12 && !direct && !asks && !cmd && !hasImage && !replyingToMe && !attackCue; // 别人回她话的短句（「？」「行」）是接茬，不是噪音；点她干活/怼她的短指令另算
+  // 新事件陈述（补「开新话题第一声」的覆盖缝）：「我/我们 + 生活事件变化」本身就是内容量信号。
+  // 这类短句（「我猫生病了」「我搬家了」）没 CUE 词、没共词，还同时吃 shortOnly 和 noInfo 双重扣分
+  // 掉到 0.4，连 review 线都够不到，被正则硬拦在闸外——给一条正向通道让它进仲裁，由模型拿主意。
+  // 保守判定：只在没有任何其它正向信号时才算「起新话头」，不和 CUE/共词/回她叠加推过 pass 线。
+  const SELF_REF_RE = /(?:^|[^你他她它])我(?:们)?(?:的)?|咱|俺/;
+  const EVENT_CUE_RE = /(生病|病倒|发烧|感冒|住院|手术|出院|搬家|搬走|入住|新房|分手|离婚|复合|脱单|相亲|结婚|订婚|领证|怀孕|生了|满月|入职|离职|辞职|跳槽|失业|被裁|考过|考上|落榜|挂科|毕业|开学|迟到|请假|加班|出差|旅行|旅游|回家|到家|出发|丢了|掉了|坏了|碎了|修好|中奖|被偷|摔倒|受伤|崴脚|牙疼|头疼|肚子疼|体检|复查|打针|接种|猫|狗|兔|鸟|娃|宝宝|宠物|主子)/;
+  const freshEventBase = T.freshEvent > 0 && SELF_REF_RE.test(clean) && EVENT_CUE_RE.test(clean)
+    && !direct && !asks && !cmd && !attackCue && !emotion && !hasImage && !replyingToMe && !continuationCue;
+  // 别人回她话的短句（「？」「行」）是接茬，不是噪音；点她干活/怼她的短指令、自述生活事件的新话头另算
+  const shortOnly = clean.length <= 12 && !freshEventBase && !direct && !asks && !cmd && !hasImage && !replyingToMe && !attackCue;
 
   // 梗图按 T.memeImg 给分（默认 0.3 的一点点，可正可负微调）；不算「回她话题」；活路见下面的「梗图接着话题」
   if (hasImage) { score += memeImg ? T.memeImg : T.image; reasons.push(memeImg ? '梗图情绪图（语气不是话题）' : '图像消息'); }
@@ -268,6 +277,9 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
     }
   }
   if (overlap > 0) score += Math.min(T.overlapCap, T.overlapBase + overlap * T.overlapStep);
+  // 有共词说明是在接旧话题（上面已经加过分），不算「起新话头」，别再叠加
+  const freshEvent = freshEventBase && overlap === 0;
+  if (freshEvent) { score += T.freshEvent; reasons.push('新事件陈述'); }
 
   const last = recent.at(-1) ? String(recent.at(-1).text || '') : '';
   if (last && clean && last.length > 0 && clean.localeCompare(last, 'zh-CN', { sensitivity: 'base' }) === 0) {
@@ -291,7 +303,7 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
     }
   }
 
-  const noNewValue = !direct && !asks && !cmd && !attackCue && !hasImage && overlap === 0 && !continuationCue && !replyingToMe;
+  const noNewValue = !freshEvent && !direct && !asks && !cmd && !attackCue && !hasImage && overlap === 0 && !continuationCue && !replyingToMe;
   if (noNewValue) { score += T.noInfo; reasons.push('无新信息'); }
 
   // 梗图唯一的活路：群里正聊着相关话题——梗图和近期消息踩中同一个话题词（「好吃」对上「烧腊饭」），
