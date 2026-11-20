@@ -198,8 +198,15 @@ const routes = {
       health: health.status(),
     };
   },
-  'GET /api/health': async (q) => (q.get('fresh') ? health.check() : health.status()),
-  'GET /api/health/deps': async (q) => (q.get('fresh') ? health.refreshDeps() : health.depsStatus()), // C6 外部依赖探活（fresh=1 立即重探）
+  // 面板「修好了，再查一次」：QQ 接入 + 外部依赖一起强制重查（否则 edgeTts 恢复了横幅还挂着 24h）
+  'GET /api/health': async (q) => {
+    if (q.get('fresh')) {
+      await health.refreshDeps({ force: true }).catch(() => {});
+      return health.check();
+    }
+    return health.status();
+  },
+  'GET /api/health/deps': async (q) => (q.get('fresh') ? health.refreshDeps({ force: true }) : health.depsStatus()), // C6 外部依赖探活（fresh=1 强制立即重探）
   'GET /api/fav': async () => ({ users: fav.readFav().users }),
   'GET /api/fav/recent': async () => ({ list: fav.todayDeltas(40) }), // 手感调参页：今天的单句记分流水
   'GET /api/memdb': async () => memdb.stats(),

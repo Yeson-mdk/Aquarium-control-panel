@@ -130,10 +130,6 @@ export const seg = {
   at: (qq) => ({ type: 'at', data: { qq: String(qq) } }),
 };
 
-/**
- * 收到的消息 → 一句给她看的文字。她看不了图、听不了语音，就如实写成 [图片] [语音]，别让她装作看见了。
- * message 可能是消息段数组，也可能是 CQ 码字符串（看 NapCat 的消息格式设置）。
- */
 /** 群消息里有没有 @ 到她（消息段数组和 CQ 码字符串都认） */
 export function atMe(ev, selfId) {
   const me = String(selfId ?? '');
@@ -143,14 +139,97 @@ export function atMe(ev, selfId) {
   if (typeof m === 'string') return m.split('[CQ:at,').slice(1).some((p) => p.split(']')[0].includes('qq=' + me));
   return false;
 }
-export function readMessage(ev) {
+
+/** reply 段的消息 id（数组/CQ 码都认）。NapCat 的 reply 段只有 id，没有 qq/name，得拿它反查原消息。 */
+export function replyRefId(ev) {
+  const m = ev?.message;
+  if (Array.isArray(m)) {
+    const r = m.find((s) => s?.type === 'reply');
+    const id = r?.data?.id ?? r?.data?.seq;
+    return id == null ? '' : String(id);
+  }
+  if (typeof m === 'string') return (m.match(/\[CQ:reply,[^\]]*\bid=(\d+)/) || [])[1] || '';
+  return '';
+}
+
+/**
+ * 反查被回复者名字：reply 段只有消息 id，调 get_msg 拿原消息 sender。
+ * 段里若已带 qq/name（某些 NapCat 版本）就直接跳过——readMessage 自己能标。
+ * 查不到返回空串，上层照旧降级标「（引用了一条消息）」，不挡收消息。
+ */
+export async function resolveReplyName(bot, ev, nameOf = (qq) => String(qq)) {
+  const m = ev?.message;
+  if (Array.isArray(m)) {
+    const r = m.find((s) => s?.type === 'reply');
+    if (r && (r.data?.qq || r.data?.user_id || r.data?.name)) return ''; // 段里已有名字，不用查
+  }
+  const id = replyRefId(ev);
+  if (!id || !bot?.state?.connected) return '';
+  try {
+    const mid = Number(id);
+    const r = await bot.call('get_msg', { message_id: Number.isFinite(mid) ? mid : id }, 3000);
+    const qq = r?.sender?.user_id ?? r?.user_id;
+    // 群名片 > 昵称 > 好友档案 > 裸号（跟日志里别人的 name 口径一致，认得出是谁）
+    const name = r?.sender?.card || r?.sender?.nickname || (qq ? nameOf(qq) : '') || '';
+    return String(name).slice(0, 20);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 引用的那条消息是回谁的 → 正文前缀。QQ「回复」功能在消息段里带 reply（NapCat 标准只带 id，
+ * 被回复者名字由 resolveReplyName 反查后从 resolvedName 传进来；某些版本段里直接带 qq/name 也能认）。
+ * CQ 码格式一般只带 id。不说出来，日志和上下文里就只剩裸正文（「你又懂了」），她会以为「你」在叫她。
+ * 一条消息里 reply 和 @ 常同时出现（回复时自动 @），只标一次、reply 优先。@ 她自己那段由 atMe 单独判，跳过。
+ */
+function replyRef(ev, selfId = '', nameOf = (qq) => String(qq), resolvedName = '') {
+  const me = String(selfId || '');
+  const m = ev?.message;
+  const label = (qq, fallback = '') => {
+    const q = String(qq || '');
+    if (q && q === me) return '你';
+    if (q) { try { return String(nameOf(q) || q).slice(0, 20); } catch { return q.slice(0, 20); } }
+    return String(fallback || '').slice(0, 20);
+  };
+  if (Array.isArray(m)) {
+    const r = m.find((s) => s?.type === 'reply');
+    if (r) {
+      const d = r.data || {};
+      const who = resolvedName || label(d.qq ?? d.user_id ?? d.user_id_str, d.name);
+      return who ? `（回复${who}）` : '（引用了一条消息）';
+    }
+    const a = m.find((s) => s?.type === 'at' && String(s.data?.qq || '') !== me && s.data?.qq);
+    if (a) return `（@${label(a.data.qq)}）`;
+    return '';
+  }
+  if (typeof m === 'string') {
+    if (/\[CQ:reply,/.test(m)) {
+      const q = (m.match(/\[CQ:reply,[^\]]*qq=(\d+)/) || [])[1] || (m.match(/\[CQ:reply,[^\]]*user_id=(\d+)/) || [])[1];
+      const who = resolvedName || label(q);
+      return who ? `（回复${who}）` : '（引用了一条消息）';
+    }
+    const a = [...m.matchAll(/\[CQ:at,qq=(\d+)/g)].map((x) => x[1]).find((q) => q !== me);
+    if (a) return `（@${label(a)}）`;
+  }
+  return '';
+}
+
+/**
+ * 收到的消息 → 一句给她看的文字。她看不了图、听不了语音，就如实写成 [图片] [语音]，别让她装作看见了。
+ * message 可能是消息段数组，也可能是 CQ 码字符串（看 NapCat 的消息格式设置）。
+ * selfId / nameOf 只在群消息里传（私聊不需要）：用来把「回复了谁」标在正文前面，报名字好认。
+ * resolvedName 是入口反查到的被回复者名字（NapCat reply 段只有 id），有就用它，没就降级标「引用了一条消息」。
+ */
+export function readMessage(ev, selfId = '', nameOf = (qq) => String(qq), resolvedName = '') {
+  const ref = replyRef(ev, selfId, nameOf, resolvedName);
   const m = ev.message;
   if (typeof m === 'string') {
-    return m.replace(/\[CQ:image[^\]]*\]/g, '[图片]').replace(/\[CQ:record[^\]]*\]/g, '[语音]').replace(/\[CQ:face[^\]]*\]/g, '[表情]')
+    return ref + m.replace(/\[CQ:image[^\]]*\]/g, '[图片]').replace(/\[CQ:record[^\]]*\]/g, '[语音]').replace(/\[CQ:face[^\]]*\]/g, '[表情]')
       .replace(/\[CQ:[^\]]*\]/g, '').replace(/&#91;/g, '[').replace(/&#93;/g, ']').replace(/&amp;/g, '&').trim();
   }
-  if (!Array.isArray(m)) return String(ev.raw_message || '').trim();
-  return m.map((s) => {
+  if (!Array.isArray(m)) return ref + String(ev.raw_message || '').trim();
+  return ref + m.map((s) => {
     if (s.type === 'text') return s.data?.text || '';
     if (s.type === 'image') return '[图片]'; // QQ 给梗图打的 summary 标签不靠谱，统一当图片走看图，让她自己认
     if (s.type === 'mface') return `[表情包${s.data?.summary || ''}]`;

@@ -151,7 +151,11 @@ function cooldownKey(peer, text) {
 /** replay=true：跑分/离线重算专用——跳过冷却期的读写，保证同一条消息反复算结果一致（无副作用）。
  *  线上判定别传，冷却是防刷屏的活状态。 */
 export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs = [], { replay = false } = {}) {
-  const raw = String(text || '');
+  // 剥入口加的「（回复XX）/（@XX）/（引用了一条消息）」前缀：那是给模型认「这句回谁」的，不是用户说的话，
+  // 名字里的「肥鱼/看/买」蹭到 direct/话题词表会误抬分（号主群名片就叫「大肥鱼.ByMEI」）。
+  // 日志里存的原文也带前缀（history 要给模型看），所以历史文本读进来同样剥。
+  const stripRef = (s) => String(s || '').replace(/^（(?:回复|@)[^）]*）|^（引用了一条消息）/, '');
+  const raw = stripRef(text);
   hasImage = hasImage || /\[图片[：:]/.test(raw); // 带描述的图（[图片：…]）也从文本认出来，试算/测试不用再传参
   const clean = raw.replace(/\[(图片|视频|表情|语音)(?:（[^\]]*）)?\]/g, '').replace(/\s+/g, ' ').trim(); // （没看清）这种占位符一并剥掉——不然「看」字会蹭中话题延续词表
   const reasons = [];
@@ -164,7 +168,9 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   const cuesIn = (s) => [...String(s || '').matchAll(CUE_ALL)].map((m) => m[0]);
   // 她刚说完、别人跟着回的（哪怕就一个「？」）是在跟她说话，不算噪音。打分发生在本条已记盘之后，
   // recent 里最后一条就是本条，滤掉再看上一条是谁说的
-  const recent = owner.recentChatDays(1, 20, peer).filter((e) => e.text && e.text !== clean && /[一-龥a-z]/i.test(String(e.text || '')));
+  const recent = owner.recentChatDays(1, 20, peer)
+    .map((e) => (e.text ? { ...e, text: stripRef(e.text) } : e)) // 日志里的回复前缀剥掉再算，别蹭话题词/误判成回她
+    .filter((e) => e.text && e.text !== clean && /[一-龥a-z]/i.test(String(e.text || '')));
   // 群聊节奏快：上一条是她说的 → 在回她的话；隔了一两句（中间有人插话）、这句又是短答（「都想」这种），
   // 也多半是在答她刚问的——不然这类两三个字的答话会当噪音拦掉，问的人干等。
   // 但得有时间窗：窗口外她那句早翻篇了（2026-11-11 线上：隔 73 分钟的图蹭「回复她的话题」9 分过闸）
@@ -174,7 +180,7 @@ export function topicScoreMessage(text, peer = 'owner', hasImage = false, imgs =
   const prevHer = recent.at(-1);
   const prevIsHer = !!prevHer && prevHer.from === 'her' && fresh(prevHer);
   const myTerms = rawTerms(clean);
-  const shortMsg = String(text || '').trim().length <= 12;
+  const shortMsg = raw.trim().length <= 12;
   const sharedWith = (e) => {
     const ht = rawTerms(String(e?.text || ''));
     return ht.length > 0 && myTerms.length > 0 && ht.some((t) => myTerms.includes(t));

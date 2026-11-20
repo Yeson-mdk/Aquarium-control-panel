@@ -57,3 +57,17 @@ test('C6.4 refreshDeps 节流 + 只在「新」失败时告警（用 health 模�
   const st = health.depsStatus();
   assert.equal(st.problems.length, 1, '保留了上次的失败状态供横幅显示');
 });
+
+test('C6.5 force=true 绕过 24h 节流立刻重探（面板「再查一次」恢复后横幅能消）', async () => {
+  const health = await import('../health.mjs');
+  let calls = 0;
+  const run = async () => { calls++; return { results: {}, problems: [], checkedAt: Date.now() }; };
+  const t0 = Date.now();
+  await health.refreshDeps({ run, now: t0, force: true }); // 先 force 真探一次，覆盖上次状态并刷新 checkedAt
+  assert.equal(calls, 1);
+  await health.refreshDeps({ run, now: t0 + 2000 });     // 不 force：24h 内被挡
+  assert.equal(calls, 1, '普通调用仍被节流');
+  await health.refreshDeps({ run, now: t0 + 2000, force: true }); // force：立刻重探
+  assert.equal(calls, 2, 'force 绕过节流重探了');
+  assert.equal(health.depsStatus().problems.length, 0, '恢复后失败状态被清掉，横幅可消');
+});

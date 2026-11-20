@@ -67,7 +67,7 @@ const store = await import('../store.mjs');
 store.writeConfig({ llm: { baseUrl: `http://127.0.0.1:${server.address().port}`, model: 'fake' }, sky: { enabled: false } });
 store.writeSecrets({ llmApiKey: 'test' });
 
-const { OneBot, readMessage, seg } = await import('../qq/onebot.mjs');
+const { OneBot, readMessage, seg, resolveReplyName, replyRefId } = await import('../qq/onebot.mjs');
 const owner = await import('../qq/owner.mjs');
 const brain = await import('../qq/brain.mjs');
 const prompts = await import('../qq/prompts.mjs');
@@ -92,6 +92,79 @@ test('OneBot：连上拿到自己的号，收消息、发消息都对得上 echo
 test('readMessage：图片语音如实写出来，CQ 码也认', () => {
   assert.equal(readMessage({ message: [{ type: 'text', data: { text: '看' } }, { type: 'image', data: {} }, { type: 'record', data: {} }] }), '看[图片][语音]');
   assert.equal(readMessage({ message: '晚安[CQ:face,id=75]&#91;嘿&#93;' }), '晚安[表情][嘿]');
+});
+
+test('readMessage：引用/回复谁标在正文前，别让模型把回别人的话当成冲她（一天等于二十年「你又懂了」）', () => {
+  const nameOf = (qq) => ({ '11': 'Yeson', '22': '大肥鱼.ByMEI' }[String(qq)] || String(qq));
+  // 消息段数组：reply 段的 qq 是被回复者；这里「你又懂了」是回 Yeson 的，不是叫她
+  assert.equal(readMessage({ message: [
+    { type: 'reply', data: { id: '1', qq: '11' } },
+    { type: 'text', data: { text: '你又懂了' } },
+  ] }, '42', nameOf), '（回复Yeson）你又懂了');
+  // reply + 自动 @ 同时出现：只标 reply 一次
+  assert.equal(readMessage({ message: [
+    { type: 'reply', data: { id: '1', qq: '11' } },
+    { type: 'at', data: { qq: '11' } },
+    { type: 'text', data: { text: '你又懂了' } },
+  ] }, '42', nameOf), '（回复Yeson）你又懂了');
+  // @ 她自己那段跳过（atMe 单独判），不加「（@你）」前缀
+  assert.equal(readMessage({ message: [
+    { type: 'at', data: { qq: '42' } }, { type: 'text', data: { text: ' 在吗' } },
+  ] }, '42', nameOf), '在吗');
+  // @ 别人
+  assert.equal(readMessage({ message: [
+    { type: 'at', data: { qq: '11' } }, { type: 'text', data: { text: '你说呢' } },
+  ] }, '42', nameOf), '（@Yeson）你说呢');
+  // NapCat 真实情况：reply 段只有 id（没 qq/name）→ 入口反查后把名字传进来，用反查的名字
+  assert.equal(readMessage({ message: [
+    { type: 'reply', data: { id: '1' } }, { type: 'text', data: { text: '哦原来把@去掉了' } },
+  ] }, '42', nameOf, '大肥鱼.ByMEI'), '（回复大肥鱼.ByMEI）哦原来把@去掉了');
+  assert.equal(readMessage({ message: '[CQ:reply,id=1]这个' }, '42', nameOf, 'Yeson'), '（回复Yeson）这个');
+  // 反查也没拿到名字：才降级标「引用了一条消息」
+  assert.equal(readMessage({ message: [
+    { type: 'reply', data: { id: '1' } }, { type: 'text', data: { text: '这个' } },
+  ] }, '42', nameOf, ''), '（引用了一条消息）这个');
+  assert.equal(readMessage({ message: '[CQ:reply,id=1]这个' }, '42', nameOf), '（引用了一条消息）这个');
+  // 老调用（不传 selfId/nameOf）行为不变：无 reply/at 的消息照旧
+  assert.equal(readMessage({ message: [{ type: 'text', data: { text: '你好' } }] }), '你好');
+});
+
+test('replyRefId / resolveReplyName：从 reply 的 id 反查被回复者，段里已带名字就不查', async () => {
+  // 抽 id：数组段（id / seq）和 CQ 码都认
+  assert.equal(replyRefId({ message: [{ type: 'reply', data: { id: '998' } }] }), '998');
+  assert.equal(replyRefId({ message: [{ type: 'reply', data: { seq: '77' } }] }), '77');
+  assert.equal(replyRefId({ message: '[CQ:reply,id=123]嗯' }), '123');
+  assert.equal(replyRefId({ message: [{ type: 'text', data: { text: '没引用' } }] }), '');
+
+  const nameOf = (qq) => ({ '11': 'Yeson', '22': '大肥鱼.ByMEI' }[String(qq)] || String(qq));
+  let called = 0;
+  const ev = { message: [{ type: 'reply', data: { id: '555' } }, { type: 'text', data: { text: '哦原来把@去掉了' } }] };
+  // 假 bot：get_msg 回一条群消息，sender 带群名片 card；记下调用参数
+  const bot = {
+    state: { connected: true },
+    call: async (action, params) => {
+      called++;
+      assert.equal(action, 'get_msg');
+      assert.equal(params.message_id, 555);
+      return { message_id: 555, user_id: 22, sender: { user_id: 22, nickname: '肥鱼', card: '大肥鱼.ByMEI' } };
+    },
+  };
+  // 群名片优先（跟日志里 name 口径一致）
+  assert.equal(await resolveReplyName(bot, ev, nameOf), '大肥鱼.ByMEI');
+  assert.equal(called, 1);
+  // 没群名片就退昵称
+  const bot2 = { state: { connected: true }, call: async () => ({ sender: { user_id: 11, nickname: 'Yeson' } }) };
+  assert.equal(await resolveReplyName(bot2, ev, nameOf), 'Yeson');
+  // 没昵称就查好友档案（nameOf）
+  const bot3 = { state: { connected: true }, call: async () => ({ user_id: 22 }) };
+  assert.equal(await resolveReplyName(bot3, ev, nameOf), '大肥鱼.ByMEI');
+  // 段里已带 qq/name：不查，返回空（readMessage 自己用段里的名字）
+  const withName = { message: [{ type: 'reply', data: { id: '1', qq: '11' } }, { type: 'text', data: { text: 'x' } }] };
+  assert.equal(await resolveReplyName(bot, withName, nameOf), '');
+  assert.equal(called, 1, '段里带名字时没调 get_msg');
+  // 没连上 / 反查报错：返回空，不抛
+  assert.equal(await resolveReplyName({ state: { connected: false }, call: async () => { throw new Error('x'); } }, ev, nameOf), '');
+  assert.equal(await resolveReplyName({ state: { connected: true }, call: async () => { throw new Error('get_msg 失败'); } }, ev, nameOf), '');
 });
 
 test('persona：拿到性格和说话方式，不带 DSH 里跑命令的那些', () => {
@@ -1326,6 +1399,18 @@ test('群自由插嘴打分：该接的接得上，不该接的压得下', () =>
   assert.equal(brain.topicScoreMessage('', 'g:ts4', true).status, 'skip');
   // 纯情绪刷屏还是拦
   assert.equal(brain.topicScoreMessage('哈哈哈哈哈哈', 'g:ts5').status, 'skip');
+});
+
+test('群自由插嘴打分：引用前缀不抬分（回别人的「你又懂了」不能当成叫她）', () => {
+  // 同一句正文：带不带「回复 XX」前缀，打分必须一致——前缀是给模型认「回谁」的，不是用户说的话。
+  // 号主群名片叫「大肥鱼.ByMEI」，要是没剥，名字里的「肥鱼」会蹭中 direct（指向你）、「看」蹭中话题词。
+  for (const prefixed of ['（回复Yeson）', '（@大肥鱼.ByMEI）', '（回复看热闹的人）', '（引用了一条消息）']) {
+    const a = brain.topicScoreMessage(prefixed + '你又懂了', 'g:ref-a');
+    const b = brain.topicScoreMessage('你又懂了', 'g:ref-b');
+    assert.equal(a.score, b.score, `${prefixed} 前缀不该改分`);
+    assert.deepEqual(a.reasons, b.reasons, `${prefixed} 前缀不该进理由`);
+    assert.ok(!a.reasons.includes('指向你'), `${prefixed} 里的名字不该触发指向你`);
+  }
 });
 
 test('群自由插嘴打分：短的新事件陈述能进仲裁（开新话题第一声）', () => {

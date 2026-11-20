@@ -102,9 +102,10 @@ const DEPS_TTL = 24 * 3600_000;
 let depsState = { results: {}, problems: [], checkedAt: 0, running: false };
 
 /** 每天跑一次外部依赖探活（process 起来后由 panel 定时器 fire-and-forget 调）。
- *  新失败走 A3 告警（去抖 6h）；恢复不单独报。 */
-export async function refreshDeps({ run = probeDeps, now = Date.now() } = {}) {
-  if (depsState.running || now - depsState.checkedAt < DEPS_TTL) return depsState;
+ *  新失败走 A3 告警（去抖 6h）；恢复不单独报。
+ *  force=true 绕过 24h 节流立刻重探——面板「修好了，再查一次」用；正在跑的那轮仍不并发。 */
+export async function refreshDeps({ run = probeDeps, now = Date.now(), force = false } = {}) {
+  if (depsState.running || (!force && now - depsState.checkedAt < DEPS_TTL)) return depsState;
   depsState.running = true;
   try {
     const r = await run({ now });

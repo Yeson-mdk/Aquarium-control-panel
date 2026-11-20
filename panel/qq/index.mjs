@@ -9,7 +9,7 @@
  * notify.mjs 发提醒、汇报、分享时也走这里（sendOwner）：小号能主动发，不用等号主先开口。
  */
 import { randomUUID } from 'node:crypto';
-import { OneBot, seg, readMessage, imageSegments, atMe } from './onebot.mjs';
+import { OneBot, seg, readMessage, imageSegments, atMe, resolveReplyName } from './onebot.mjs';
 import * as brain from './brain.mjs';
 import * as sqmusic from './sqmusic.mjs';
 import * as dsh from './dsh.mjs';
@@ -196,7 +196,10 @@ async function onMessage(ev) {
       groups.noteGroup('g:' + ev.group_id, { name: ev.group_name || '' });
     } catch { /* 记不住不影响聊天 */ }
     const at = atMe(ev, bot?.state.selfId);
-    let text = readMessage(ev);
+    // 带上「引用/回复谁」的前缀（@ 她自己那段由 atMe 判，这里跳过），别让模型把回别人的话当成冲她。
+    // NapCat 的 reply 段只有消息 id，先反查原消息 sender 拿名字；查不到照旧标「引用了一条消息」，不挡收消息。
+    const replyName = await resolveReplyName(bot, ev, friendName);
+    let text = readMessage(ev, bot?.state.selfId, friendName, replyName);
     // @ 带图才看（跟私聊一样走「看图模型」）；开了插嘴就没@的图也看——她既然在旁边听大家聊，看不见图就接不上话。视频不看
     const vmod = String(cfg.visionModel || '').trim();
     let imgs = [];
@@ -301,7 +304,8 @@ async function onMessage(ev) {
     if (!strangers.has(key)) { strangers.add(key); logAction({ kind: 'qq', source: 'auto', detail: `有人（${ev.user_id}）私聊小号，没理` }); }
     return;
   }
-  let text = readMessage(ev);
+  const replyName = await resolveReplyName(bot, ev, friendName);
+  let text = readMessage(ev, bot?.state.selfId, friendName, replyName);
   if (!text) return;
   // 图片先让能看图的模型看一眼，把「[图片]」换成她看到的样子：开了 DSH 走 DSH，没开就走「看图模型」直连接口
   const vmod = String(cfg.visionModel || '').trim();
