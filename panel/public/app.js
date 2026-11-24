@@ -347,18 +347,18 @@ function renderMemories(box, mem) {
     const title = dayTitle(g.ts);
     const rows = `<ul class="vip-list">${g.rows.map(memRow).join('')}</ul>`;
     return title === '今天' || title === '昨天'
-      ? `<div class="small" style="margin:10px 0 4px"><span class="k">${title}</span> <span class="muted">${g.rows.length} 条</span></div>${rows}`
-      : `<details style="margin-top:6px"><summary class="small muted">${title} · ${g.rows.length} 条</summary>${rows}</details>`;
+      ? `<div class="small" style="margin:10px 0 4px"><span class="k sec-k">${title}</span> <span class="muted">${g.rows.length} 条</span></div>${rows}`
+      : `<details class="mem-fold"><summary class="small muted">${title} · ${g.rows.length} 条</summary>${rows}</details>`;
   }).join('') : '<div class="empty">还没有她的经历，等她刷起来、计划跑起来就有了</div>';
 
-  const ideasHtml = `${pend.length ? `<div class="small" style="margin:10px 0 4px"><span class="k">💭 待审洞察</span> <span class="muted">审核池开着：你放行才进她的记忆流</span></div>
-    <ul class="vip-list">${pend.map((p, i) => `<li><div style="flex:1;min-width:0" class="small">💭 ${esc(p.text)}<div class="muted">${esc(p.at || '')}</div></div>
-      <button class="btn sm" data-insok="${i}">放行</button><button class="btn sm ghost" data-insno="${i}">丢掉</button></li>`).join('')}</ul>` : ''}
-    ${ideas.length ? `<div class="small" style="margin:10px 0 4px"><span class="k">洞察与想法</span> <span class="muted">她自己归纳的结论和内心活动——是猜想不是观测；recall 打分自带折扣，不会盖过真事</span></div>
+  const ideasHtml = `${pend.length ? `<div class="mem-pending"><div class="small"><span class="k sec-k">💭 待审洞察</span> <span class="muted">审核池开着：你放行才进她的记忆流</span></div>
+    <ul class="vip-list" style="margin-top:8px">${pend.map((p, i) => `<li><div style="flex:1;min-width:0" class="small">💭 ${esc(p.text)}<div class="muted">${esc(p.at || '')}</div></div>
+      <button class="btn sm" data-insok="${i}">放行</button><button class="btn sm ghost" data-insno="${i}">丢掉</button></li>`).join('')}</ul></div>` : ''}
+    ${ideas.length ? `<div class="small" style="margin:10px 0 4px"><span class="k sec-k">洞察与想法</span> <span class="muted">她自己归纳的结论和内心活动——是猜想不是观测；recall 打分自带折扣，不会盖过真事</span></div>
     <ul class="vip-list">${ideas.map(memRow).join('')}</ul>` : '<div class="empty">还没有想法，每晚反思之后会有</div>'}
-    ${retired.length ? `<details style="margin-top:8px"><summary class="small muted">被推翻的洞察 ${retired.length} 条（折叠留着，错了还能翻回来）</summary><ul class="vip-list">${retired.map((e) => `<li><div style="flex:1;min-width:0" class="small muted">💭 ${esc(e.text)}<div class="muted">${ago(e.ts)}</div></div></li>`).join('')}</ul></details>` : ''}`;
+    ${retired.length ? `<details class="mem-fold"><summary class="small muted">被推翻的洞察 ${retired.length} 条（折叠留着，错了还能翻回来）</summary><ul class="vip-list">${retired.map((e) => `<li><div style="flex:1;min-width:0" class="small muted">💭 ${esc(e.text)}<div class="muted">${ago(e.ts)}</div></div></li>`).join('')}</ul></details>` : ''}`;
 
-  const zone = (t, d, rows) => rows.length ? `<div class="small" style="margin:10px 0 4px"><span class="k">${t}</span> <span class="muted">${d}</span></div>
+  const zone = (t, d, rows) => rows.length ? `<div class="small" style="margin:10px 0 4px"><span class="k sec-k">${t}</span> <span class="muted">${d}</span></div>
     <ul class="vip-list">${rows.map(memRow).join('')}</ul>` : '';
   const gistHtml = `${zone('印象', '她自己把零碎事概括成的', impr)}
     ${zone('对话日结', `号主 / 群 / 好友私聊每晚结的${chats.length > chatShow.length ? `，只列最近 ${chatShow.length} 条（共 ${chats.length} 条，更早的几天后会合成印象）` : '，几天后会合成印象'}`, chatShow)}
@@ -386,7 +386,7 @@ function renderMemories(box, mem) {
     const r = await api('/api/memdb/search', { q }).catch(() => ({ hits: [] }));
     const hits = r.hits || [];
     out.innerHTML = hits.length
-      ? `<div class="small" style="margin-top:6px"><span class="k">淡忘档案</span> 搜到 ${hits.length} 条 <span class="muted">（想不太清了的原文，不会自己想起来，但你翻得到）</span></div>
+      ? `<div class="small" style="margin-top:6px"><span class="k sec-k">淡忘档案</span> 搜到 ${hits.length} 条 <span class="muted">（想不太清了的原文，不会自己想起来，但你翻得到）</span></div>
       <ul class="vip-list">${hits.slice(0, 20).map((e) => `<li><div style="flex:1;min-width:0" class="small">${MEM_KIND[e.kind] || '•'} ${esc(e.text)}<div class="muted">${e.kind === 'fact' ? `记于 ${esc(e.ts || '')}` : `${ago(e.ts)} · 重要 ${e.imp}/5${e.seen ? ' · 忘掉前想起过' : ''}`}</div></div></li>`).join('')}</ul>`
       : '<div class="empty" style="margin-top:6px">档案里也没有</div>';
   });
@@ -425,7 +425,7 @@ async function pageMemory(main) {
   S.memTab = S.memTab || 'mine';
   main.innerHTML = head('记忆', intro) +
     `<div class="seg" id="memSeg"><button data-v="mine" class="${S.memTab === 'mine' ? 'on' : ''}">她自己的（${mem.total || 0}）</button><button data-v="owner" class="${S.memTab === 'owner' ? 'on' : ''}">关于你的事（${facts.length}）</button><button data-v="friends" class="${S.memTab === 'friends' ? 'on' : ''}">朋友们（${friends.length}）</button></div>
-     <div class="card" id="memCard"></div>`;
+     <div class="card memCard" id="memCard"></div>`;
   const FACT_SRC = { nightly: '每晚整理记的', chat: '聊天时记的', dsh: '从 DSH 带来的' };
   const renderTab = () => {
     const card = $('#memCard', main);
@@ -437,19 +437,28 @@ async function pageMemory(main) {
     } else if (S.memTab === 'friends') {
       const soc = fr.social;
       card.innerHTML = `<div class="card-h"><h2>她的朋友们</h2><span class="small muted">群里和私聊里认识的人，一人一份小档案；互不串场，也不进她跟号主的印象</span></div>
-        ${soc?.text ? `<p class="small" style="margin-top:0">💬 朋友圈近况（${esc(soc.date || '')}）：${esc(soc.text)}</p>` : ''}
+        ${soc?.text ? `<p class="small friend-social">💬 朋友圈近况（${esc(soc.date || '')}）：${esc(soc.text)}</p>` : ''}
         ${friends.length ? `<ul class="vip-list friend-list">${friends.map((f) => {
           const groups = f.groups || [];
           const groupText = groups.slice(0, 3).join('、') + (groups.length > 3 ? ` +${groups.length - 3}` : '');
           return `<li><div class="friend-item small">
             <div class="friend-title"><b>${esc(f.name || f.qq || '没记住名字')}</b>${f.fav ? `<span class="chip">好感 ${f.fav.fav}%</span>` : ''}${groups.length ? `<span class="chip friend-groups" title="全部群：${esc(groups.join('、'))}">群 ${esc(groupText)}</span>` : ''}</div>
             <div class="muted">最近活跃 ${ago(f.lastSeen)}</div>
-            <div class="friend-notes">${(f.notes || []).slice().reverse().map((n) => `<div>${esc(n.text)} <span class="muted">${esc(n.at)}</span></div>`).join('')}</div>
+            <div class="friend-notes">${(f.notes || []).slice().reverse().map((n) => `<div class="friend-note"><span class="friend-note-text">${esc(n.text)}</span><span class="muted">${esc(n.at)}</span><button class="btn-mini note-del" data-key="${esc(f.key)}" data-i="${n.i}" data-text="${esc(n.text)}" title="删掉这条，她就不记得了">×</button></div>`).join('')}</div>
             <button class="btn-mini friend-del" data-qq="${esc(f.qq || '')}" title="删掉这个人的全部数据（不可恢复）">删掉这个人</button>
           </div></li>`;
         }).join('')}</ul>` : '<div class="empty">还没认识谁，去群里聊聊或有人私聊她之后，每晚整理会建档</div>'}`;
       // 绑定必须在渲染之后、且在 renderTab 内部：切 tab 重渲染会生成新按钮，外面绑一次等于没绑
-      $$('.friend-del', card).forEach((b) => (b.onclick = () => deleteFriendFlow(b.dataset.qq, renderTab)));
+      $$('.note-del', card).forEach((b) => (b.onclick = async () => {
+        if (!await confirmBox('删掉这条记忆？', `「${b.dataset.text}」\n删了她就不再记得这一条。`, '删掉')) return;
+        busy(b, async () => {
+          const r = await api('/api/friends/note/delete', { key: b.dataset.key, i: Number(b.dataset.i), expect: b.dataset.text });
+          if (!r?.ok) { toast(r?.error || '没删掉'); return; }
+          toast('这条她不再记得了');
+          pageMemory(main);
+        });
+      }));
+      $$('.friend-del', card).forEach((b) => (b.onclick = () => deleteFriendFlow(b.dataset.qq, () => pageMemory(main))));
     } else {
       card.innerHTML = `<div class="card-h"><h2>她自己的</h2><span class="small muted">日子 = 经历 · 想法 = 洞察与内心 · 印象·日结 = 压缩层 · 档案 = 淡忘的原文</span></div>
         <div id="memPageList"></div>`;
@@ -799,7 +808,7 @@ async function pageBotscore(main) {
 // ─── 手感调参：插嘴打分权重 / 限流 / 防抖，全部外置在 data/tuning.json，存了立刻生效 ───
 const TUNE_LABELS = {
   topic: [['base', '底分'], ['pass', '直接过闸 ≥'], ['review', '进仲裁 ≥'], ['image', '带图'], ['memeImg', '梗图分'], ['direct', '指向她'], ['asks', '带提问'], ['cmd', '短指令'], ['attack', '被点名怼'], ['continuation', '话题延续'], ['freshEvent', '新事件陈述（0=关）'], ['replyToMe', '回她的话'], ['replyWindowMin', '「回她的话」窗口（分）'], ['overlapBase', '接续起步'], ['overlapStep', '接续步进'], ['overlapCap', '接续封顶'], ['emotion', '纯情绪'], ['shortOnly', '短句无信息'], ['repeatText', '重复表述'], ['cooldownRepeat', '冷却期重复'], ['noInfo', '无新信息'], ['cooldownSec', '冷却期（秒）']],
-  gate: [['debounceGroupMs', '群防抖（毫秒）'], ['debouncePrivateMs', '私聊防抖（毫秒）'], ['jitterAmplitude', '抖动幅度（±比例 0~1）'], ['jitterFrequency', '抖动频率（0~1，0=关）'], ['jitterMinMs', '抖动范围下限（毫秒）'], ['jitterMaxMs', '抖动范围上限（毫秒）'], ['userRateWindowMin', '限流窗口（分钟）'], ['userRateMax', '窗口内最多回（次）'], ['herRateWindowMin', '她的熔断窗口（分钟）'], ['herRateMax', '窗口内她最多自由插嘴（句）'], ['pokeFreshSec', '拍一拍回头窗口（秒，0=关闸）'], ['pokeJitterRatio', '拍一拍窗口抖动（±比例）'], ['pokeFreshMinSec', '窗口下限（秒）'], ['pokeFreshMaxSec', '窗口上限（秒）']],
+  gate: [['debounceGroupMs', '群防抖（毫秒）'], ['debouncePrivateMs', '私聊防抖（毫秒）'], ['batchMaxWaitPrivateMs', '私聊合并最长等待（毫秒，0=关）'], ['batchMaxWaitGroupMs', '群合并最长等待（毫秒，0=关）'], ['batchMaxMsgs', '一批最多几条（0=不限）'], ['mergeSend', '一轮回复合成一条（1=是，0=拆条）'], ['jitterAmplitude', '抖动幅度（±比例 0~1）'], ['jitterFrequency', '抖动频率（0~1，0=关）'], ['jitterMinMs', '抖动范围下限（毫秒）'], ['jitterMaxMs', '抖动范围上限（毫秒）'], ['userRateWindowMin', '限流窗口（分钟）'], ['userRateMax', '窗口内最多回（次）'], ['herRateWindowMin', '她的熔断窗口（分钟）'], ['herRateMax', '窗口内她最多自由插嘴（句）'], ['pokeFreshSec', '拍一拍回头窗口（秒，0=关闸）'], ['pokeJitterRatio', '拍一拍窗口抖动（±比例）'], ['pokeFreshMinSec', '窗口下限（秒）'], ['pokeFreshMaxSec', '窗口上限（秒）']],
   fav: [['msgMax', '单条消息上限（±分）'], ['dayMax', '单日净分上限'], ['amp', '当天情绪放大倍数'], ['minDays', '老朋友α下限（天）'], ['lo', '好感下界'], ['hi', '好感上界'], ['decayEveryDays', '淡忘间隔（天）'], ['decayPer', '每次淡几分'], ['decayMax', '断太久一次最多淡'], ['keepDays', '走势留多少天']],
   ctx: [['days', '聊天原文带几天（1~30）']],
   sticker: [['ownerEvery', '号主私聊几条配一图'], ['friendEvery', '好友私聊几条配一图'], ['groupEvery', '群聊几条配一图']],

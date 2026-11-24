@@ -286,6 +286,38 @@ test('cancelDaily：只停同一人同一来源的 daily，不碰一次性约定
   assert.equal(readTasks().find((x) => x.id === otherPeer.id).status, 'pending', '别群的同名没动');
 });
 
+test('isStopCue：喊停话术命中、普通聊天不误判', () => {
+  // 用户实际说过的两句
+  assert.equal(appoint.isStopCue('后面早上不用叫我了'), true);
+  assert.equal(appoint.isStopCue('不用叫了'), true);
+  assert.equal(appoint.isStopCue('别再喊我了'), true);
+  assert.equal(appoint.isStopCue('取消每天那个提醒'), true);
+  assert.equal(appoint.isStopCue('停了闹钟吧'), true);
+  // 光秃秃的指代、普通聊天不误判（「别叫她」不是喊停、「不用管」不是不用叫）
+  assert.equal(appoint.isStopCue('别叫她'), false);
+  assert.equal(appoint.isStopCue('这个不用管'), false);
+  assert.equal(appoint.isStopCue('你又懂了'), false);
+  assert.equal(appoint.isStopCue('明天早上九点叫我'), false, '约定不能当喊停');
+});
+
+test('cancelDailyOnStop：白天喊停当场停 daily，不等夜间链；不误伤一次性/别人/别群', () => {
+  for (const t of readTasks().filter((x) => isJobLike(x) && x.status === 'pending')) store.updateTask(t.id, { status: 'cancelled' });
+  const mine = appoint.addJob({ at: NOW + 3600_000, kind: 'say', peer: 'g:9005', sourcePeer: 'g:9005', repeat: 'daily', originText: '每天早上叫我', who: 'Yeson', whoQq: '10086' });
+  const once = appoint.addJob({ at: NOW + 3600_000, kind: 'say', peer: 'g:9005', sourcePeer: 'g:9005', repeat: 'once', originText: '一次性叫一次', who: 'Yeson', whoQq: '10086' });
+  const other = appoint.addJob({ at: NOW + 3600_000, kind: 'say', peer: 'g:9005', sourcePeer: 'g:9005', repeat: 'daily', originText: '别人的每天', who: '路人', whoQq: '999' });
+  const otherPeer = appoint.addJob({ at: NOW + 3600_000, kind: 'say', peer: 'g:9999', sourcePeer: 'g:9999', repeat: 'daily', originText: '别群每天叫我', who: 'Yeson', whoQq: '10086' });
+  // 命中话术才停，且只停本人本会话的 daily
+  assert.equal(appoint.cancelDailyOnStop({ peer: 'g:9005', who: 'Yeson', whoQq: '10086', text: '后面早上不用叫我了' }), 1);
+  assert.equal(readTasks().find((x) => x.id === mine.id).status, 'cancelled', '当场停了');
+  assert.equal(readTasks().find((x) => x.id === once.id).status, 'pending', '一次性没动');
+  assert.equal(readTasks().find((x) => x.id === other.id).status, 'pending', '别人没动');
+  assert.equal(readTasks().find((x) => x.id === otherPeer.id).status, 'pending', '别群没动');
+  // 非喊停话术一个都不停（再建一条验证）
+  const again = appoint.addJob({ at: NOW + 3600_000, kind: 'say', peer: 'g:9005', sourcePeer: 'g:9005', repeat: 'daily', originText: '再建一条', who: 'Yeson' });
+  assert.equal(appoint.cancelDailyOnStop({ peer: 'g:9005', who: 'Yeson', text: '明天早上叫我' }), 0);
+  assert.equal(readTasks().find((x) => x.id === again.id).status, 'pending', '约定话术不触发取消');
+});
+
 test('set_appointment daily：口头告知带"每天+30天"，落库 repeat=daily', async () => {
   const dueAt = new Date(NOW + 3600_000).toISOString();
   const r = await brain.runTool('set_appointment', { dueAt, text: '每天8点叫我', repeat: 'daily' }, { isOwner: true, peerKey: 'owner', name: '号主' });

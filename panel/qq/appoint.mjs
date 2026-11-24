@@ -310,6 +310,27 @@ function advanceDaily(j, now = Date.now()) {
   updateTask(j.id, { status: 'pending', at: next, dueAt: next, nextAt: next, firedAt: null, startedAt: started });
 }
 
+/** 喊停日常任务的即时话术判定（消息一进来就判，不等夜间 22 点的约定扫描）。
+ *  号主白天说「不用叫了」，不能拖到晚上才停——那期间他会被多叫好几天。
+ *  只认明确的「否定 + 叫/喊/提醒」或「取消 + 每天/闹钟/叫醒」，普通闲聊不碰。 */
+const STOP_DAILY_CUE_RE = /(?:不用|别|不要|不必|不需要|不用再|别再|不要再)\s*(?:再\s*)?(?:叫|喊|提醒|催|叫醒|喊醒)\s*(?:我|一下|我了|醒我|叫醒我|了|啦|吧)|(?:取消|停了|停掉|停止)\s*(?:每天|每日|那个|之前|叫醒|闹钟|提醒|叫)/;
+
+export function isStopCue(text) {
+  return STOP_DAILY_CUE_RE.test(String(text || ''));
+}
+
+/** 消息入口即时喊停：命中话术就停掉这个人、这个会话下的 daily 任务。
+ *  沿用 cancelDaily 的全部护栏——只停 daily、只停同一发起人+来源会话，不碰一次性/别人/别群。
+ *  peer='owner'（号主私聊）不传 who：owner 会话里只有号主自己的任务，按 peer 全停最可靠
+ *  （建任务时 who 是 LLM 抽的名字，未必对得上他此刻的群名片）。群聊必须传 who，别停了别人的。
+ *  返回停掉的条数。 */
+export function cancelDailyOnStop({ peer, who = '', whoQq = '', text = '' } = {}) {
+  if (!isStopCue(text)) return 0;
+  const n = cancelDaily({ peer, who, whoQq });
+  if (n) logAction({ kind: 'appointment', source: 'auto', detail: `${who || whoQq || '有人'}说不用叫了，当场停了 ${n} 条每天的任务`, target: peer });
+  return n;
+}
+
 /** 中止入口：把某人某来源会话下的 daily 任务停掉（被赴约人喊"不用继续了"时调）。
  *  只动 daily、只动同一发起人+来源会话，不碰一次性约定、不误伤别人。返回停掉的条数。 */
 export function cancelDaily({ peer, who = '', whoQq = '' } = {}) {

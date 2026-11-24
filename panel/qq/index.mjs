@@ -14,6 +14,7 @@ import * as brain from './brain.mjs';
 import * as sqmusic from './sqmusic.mjs';
 import * as dsh from './dsh.mjs';
 import * as owner from './owner.mjs';
+import * as appoint from './appoint.mjs';
 import { tuning } from './tuning.mjs';
 import { jitterDelay, gateJitter } from './jitter.mjs';
 import { decideRate, calmMs, exemptKey } from './rate.mjs';
@@ -33,9 +34,27 @@ const herFreeRate = new Map(); // 她自己的熔断记账：peer → 她最近�
 const exemptDaily = new Map(); // C2 每日豁免上限：'peer:QQ号:日期' → 今天点名叫她已放行几次（跨天换 key 自动清零）
 const attackHits = new Map();  // C2 冷静窗：'peer:QQ号' → 最近几次怼/复读的时间戳
 const calmUntil = new Map();   // C2 冷静窗：'peer:QQ号' → 冷静到几毫秒（期间自由插嘴全拦）
-const conv = (peer) => { if (!convs.has(peer)) convs.set(peer, { queue: [], timer: null, busy: false, lastQq: null, seenImgs: [] }); return convs.get(peer); };
+const conv = (peer) => { if (!convs.has(peer)) convs.set(peer, { queue: [], timer: null, hardTimer: null, busy: false, lastQq: null, seenImgs: [] }); return convs.get(peer); };
 // 防抖延时加可控抖动：默认参数下原样返回目标值，零回归。配置关着时连随机都不消耗。
 const debounceMs = (base) => jitterDelay(base, gateJitter(tuning().gate));
+const clearTimers = (c) => { clearTimeout(c.timer); c.timer = null; clearTimeout(c.hardTimer); c.hardTimer = null; };
+/** 入队一套统一的计时：安静计时器每来一条就重置；硬上限只在本批第一条时起，之后不再重置。
+ *  这样慢慢连发（4~9 秒一条）也能并进一轮，但最多等到硬上限，不会在他一直打字时永远不出声。 */
+function enqueue(peer, item, baseMs) {
+  const c = conv(peer);
+  const first = c.queue.length === 0;
+  const G = tuning().gate;
+  c.queue.push(item);
+  clearTimeout(c.timer);
+  c.timer = setTimeout(() => flush(peer).catch((e) => console.error('[qq] flush', e)), debounceMs(baseMs));
+  const maxWait = Number(peer.startsWith('g:') ? G.batchMaxWaitGroupMs : G.batchMaxWaitPrivateMs) || 0;
+  if (first && maxWait > 0) {
+    clearTimeout(c.hardTimer);
+    c.hardTimer = setTimeout(() => flush(peer).catch((e) => console.error('[qq] flush', e)), maxWait);
+  }
+  const maxMsgs = Math.max(0, Math.round(Number(G.batchMaxMsgs) || 0));
+  if (maxMsgs > 0 && c.queue.length >= maxMsgs) flush(peer).catch((e) => console.error('[qq] flush', e));
+}
 // 她看过的图按对话留 3 分钟：人家常常发完图、隔一句才说「存成表情包」，那时图也得还在手上
 const rememberImgs = (peer, imgs) => {
   if (!imgs.length) return;
@@ -72,6 +91,7 @@ export function start() {
 export function stop() {
   bot?.stop();
   bot = null;
+  for (const c of convs.values()) clearTimers(c); // 断开后别让攒着的防抖/硬窗口醒来再叫模型
   clearInterval(ticker);
   ticker = null;
 }
@@ -156,9 +176,7 @@ async function onNotice(ev) {
     owner.logChat({ from: 'owner', text: POKE(name), peer, name, fid });
     const c = conv(peer);
     if (qq) c.lastQq = qq;
-    c.queue.push({ text: POKE_INPUT(name), ts: Date.now(), name, fid });
-    clearTimeout(c.timer);
-    c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), debounceMs(tuning().gate.debouncePrivateMs));
+    enqueue(peer, { text: POKE_INPUT(name), ts: Date.now(), name, fid }, tuning().gate.debouncePrivateMs);
   };
   if (ev.group_id) {
     if (!pub) return; // 只认号主时，群里的动静整个不看
@@ -224,6 +242,9 @@ async function onMessage(ev) {
       friends.touch(ev.user_id, name, peer); // 群里说话的人也进朋友圈档案，群里群外对得上号
     }
     if (!text) return;
+    // 喊停即时取消：白天说「不用叫了」当场停掉他在这个会话的 daily 任务，不等夜间 22 点的约定扫描
+    // （否则白天说完到夜里还要被叫好几遍）。传名字+QQ 双保险匹配发起人；不 return，让她照常回一句。
+    try { appoint.cancelDailyOnStop({ peer: 'g:' + ev.group_id, who: name, whoQq: String(ev.user_id), text }); } catch { /* 停任务不挡收消息 */ }
     // 回不回的两个开关：groupAt 管「@了回不回」，groupFree 管「没@也让模型自己看要不要插嘴」
     const wantAt = at && cfg.groupAt !== false;
     const wantFree = !at && !!cfg.groupFree;
@@ -288,12 +309,10 @@ async function onMessage(ev) {
         return;
       }
     }
-    const c = conv(peer);
-    c.lastQq = ev.user_id;
-    c.queue.push({ text, ts: Date.now(), name, fid, imgs, qq: ev.user_id, free: !at }); // free 的批次她可以选择不吭声（SKIP）；qq 记说话的人，好感单人批次才记分用
-    clearTimeout(c.timer);
-    // 群聊节奏快，防拆条等 1.2 秒就够（等久了回复落地时又被新消息超过，永远慢一拍）；私聊他爱连发，仍等 2.5 秒
-    c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), debounceMs(tuning().gate.debounceGroupMs));
+    conv(peer).lastQq = ev.user_id;
+    // 群聊节奏快，防拆条等 1.2 秒就够（等久了回复落地时又被新消息超过，永远慢一拍）；私聊他爱连发，仍等 2.5 秒。
+    // 另外还有「本批第一条起算」的硬上限：慢慢连发也能并进一轮，但不会无限等下去。
+    enqueue(peer, { text, ts: Date.now(), name, fid, imgs, qq: ev.user_id, free: !at }, tuning().gate.debounceGroupMs); // free 的批次她可以选择不吭声（SKIP）；qq 记说话的人，好感单人批次才记分用
     return;
   }
   if (ev.message_type !== 'private') return;
@@ -314,7 +333,6 @@ async function onMessage(ev) {
   if (text.includes('[图片]') && vmod) ({ text, imgs } = await seeImages(ev, text)); // 看图只看「看图模型」配没配（固定走 ModelScope），不看 DSH 开关
   const peer = isOwner ? 'owner' : 'p:' + ev.user_id;
   rememberImgs(peer, imgs);
-  const c = conv(peer);
   if (isOwner && /^\/(new|重来|清空)$/.test(text)) {
     owner.resetContext();
     await sendText('好，那我们重新开始聊～');
@@ -323,15 +341,17 @@ async function onMessage(ev) {
   const fid = randomUUID();
   owner.logChat({ from: 'owner', text, peer, fid });
   if (!isOwner) friends.touch(ev.user_id, ev.sender?.card || ev.sender?.nickname || ''); // 好友也进朋友圈档案
-  c.queue.push({ text, ts: Date.now(), name: ev.sender?.card || ev.sender?.nickname || '', fid, imgs }); // 好感档案记名字用，多人时不至于一排裸 QQ 号
-  // 他常常一句话分几条发：等 2.5 秒没新的再一起回
-  clearTimeout(c.timer);
-  c.timer = setTimeout(() => flush(peer).catch((e) => console.error("[qq] flush", e)), debounceMs(tuning().gate.debouncePrivateMs));
+  // 喊停即时取消：号主私聊说「不用叫了」当场停 owner 会话的 daily（owner 会话只有号主，不传 who）；
+  // 好友私聊传本人 who+QQ。不 return，让她照常回一句。
+  try { appoint.cancelDailyOnStop({ peer, who: isOwner ? '' : (ev.sender?.card || ev.sender?.nickname || ''), whoQq: isOwner ? '' : String(ev.user_id), text }); } catch { /* 停任务不挡收消息 */ }
+  // 他常常一句话分几条发：等 2.5 秒没新的再一起回；另有硬上限（默认 6 秒，从本批第一条起算），慢慢连发也能并进一轮
+  enqueue(peer, { text, ts: Date.now(), name: ev.sender?.card || ev.sender?.nickname || '', fid, imgs }, tuning().gate.debouncePrivateMs); // 好感档案记名字用，多人时不至于一排裸 QQ 号
 }
 
 async function flush(peer = 'owner') {
   const c = conv(peer);
   if (c.busy || !c.queue.length) return;
+  clearTimers(c); // 防抖和硬上限谁先到都走这儿，另一个别留着再触发一趟空 flush
   c.busy = true;
   const batch = c.queue;
   c.queue = [];
@@ -360,7 +380,7 @@ async function flush(peer = 'owner') {
         ? batch.map((b) => `[${b.name || '群友'}] ${b.text}`).join('\n')
         : batch.map((b) => b.text).join('\n');
       const cur = batch.flatMap((b) => b.imgs || []).slice(0, 3); // 这批消息自己带的图；一条没带就用最近看过的（「存成表情包」往往隔一句才说）
-      out = await brain.reply(joined, { fids: batch.map((b) => b.fid), imgs: cur.length ? cur : freshImgs(c), model: readConfig().qq.model || undefined, qq: t.qq || c.lastQq || undefined, peer, name: String(batch.at(-1).name || ''), free, solo });
+      out = await brain.reply(joined, { fids: batch.map((b) => b.fid), imgs: cur.length ? cur : freshImgs(c), model: readConfig().qq.model || undefined, qq: t.qq || c.lastQq || undefined, peer, name: String(batch.at(-1).name || ''), free, solo, batchSize: batch.length });
     } catch (e) {
       logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: '想回你的时候脑子卡了' });
       if (!free) await sendText('诶，我脑子卡了一下 qwq 你再说一遍？', undefined, peer); // 自由插嘴没想成就算了，别硬刷存在感
@@ -491,7 +511,10 @@ async function deliver(out, peer = 'owner') {
   const t = out.voice && voiceDupsText(text, out.voice.text) ? '' : text;
   // 点歌时那句「唱啦」必须排在音频后面：交给 singThenSay 在歌真正发出去后再发，
   // 这里先别发文字——不然群里先看到话、几十秒后才听到歌，像说了空话（2026-11-18）。
-  if (t && !out.singingTask) await sendChatLines(t, peer, at);
+  if (t && !out.singingTask) {
+    if (Number(tuning().gate.mergeSend) > 0) await sendText(t, undefined, peer, at); // 一轮只发一条：换行留在同一个气泡里，[TO:] 解析出的 @ 照旧带
+    else await sendChatLines(t, peer, at);
+  }
   if (out.research) doResearch(out.research, peer);
   if (out.makeSticker) doSticker(out.makeSticker);
   if (out.sticker) {

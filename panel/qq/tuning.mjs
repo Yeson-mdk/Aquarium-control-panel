@@ -37,6 +37,12 @@ export const DEFAULTS = {
   gate: {
     debounceGroupMs: 1200,   // 群聊防抖：等这么久没新消息才一起回
     debouncePrivateMs: 2500, // 私聊防抖（号主爱连发）
+    // 合并回复：防抖是「安静多久才发」，每来一条就重新计时——他慢慢连发（4~9 秒一条）就会条条单回。
+    // 这两个是本批第一条之后的硬上限：到点必发，不随新消息重置；0=关，退回纯防抖老行为。
+    batchMaxWaitPrivateMs: 0, // 私聊最长等多久（毫秒）才一定要回
+    batchMaxWaitGroupMs: 0,   // 群聊最长等多久（毫秒）才一定要回
+    batchMaxMsgs: 0,          // 一批最多攒几条；0=不限（硬上限已经兜住等待时间）
+    mergeSend: 0,             // 1=一轮回复合成一条 QQ 消息发（换行留在同一条里），0=按换行拆条（老行为）
     // 回复时机抖动（panel/qq/jitter.mjs）：让防抖不再是每次都一样的死值。
     // 默认全 0 = 关闭，行为与加抖动前逐毫秒一致。想活一点：amplitude 0.2~0.3、frequency 0.5~0.7。
     jitterAmplitude: 0,      // 幅度：±占目标值的比例（0~1）。0.25 = 1200ms 抖到 900~1500ms

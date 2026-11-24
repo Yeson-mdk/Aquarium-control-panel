@@ -90,13 +90,14 @@ test('2.1 洞察：空数组不写条目、坏 JSON 不炸、记忆太少不空�
   let r = await mind.insight();
   assert.deepEqual(r.added, [], '空洞察合法，不硬凑');
   assert.ok(!store.readActions().at(-1).detail.includes('💭'), '都空就不记日志（最后一条还是垫的那条）');
-  llmQueue.push({ content: '今天天气不错呀' }); // 坏 JSON
-  r = await mind.insight();
+  // 坏 JSON：现在会重试 3 次（retryDelayMs=0 免得测试空等），三次都坏才算失败
+  for (let i = 0; i < 3; i++) llmQueue.push({ content: '今天天气不错呀' });
+  r = await mind.insight({ retryDelayMs: 0 });
   assert.equal(r, null, '坏 JSON：整晚跳过不炸（明晚再说）');
   assert.match(store.readActions().at(-1).detail, /洞察没跑成/, '失败要留 💭 日志——静默吞掉的话，线上连挂 N 晚日志上都一片安静，没法排查');
   // 模型给了洞察但依据 id 全对不上：另一种静默死法，也要留痕（不然和「模型没给」分不开）
   llmQueue.push({ content: JSON.stringify({ insights: [{ text: '一条依据对不上的洞察', from: ['垃圾id'], why: 'x' }], retire: [] }) });
-  r = await mind.insight();
+  r = await mind.insight({ retryDelayMs: 0 });
   assert.deepEqual(r.added, [], '依据全无效的整条忽略');
   assert.match(store.readActions().at(-1).detail, /依据.*对不上/, 'id 全对不上要留 💭 日志');
   // 记忆清空后（<5 条）不调模型
@@ -192,4 +193,44 @@ test('洞察的输出预算 ≥800：400 时 flash 前置吃完就没地方写 J
   const sent = llmCalls.slice(before).at(-1);
   assert.ok(sent, '调了模型');
   assert.ok(sent.max_tokens >= 800, `max_tokens 要 ≥800（实际 ${sent.max_tokens}）——洞察回包带 from/why，400 装不下`);
+});
+
+test('洞察降温 + 重试：模型第一次回纯文字（没有 {），第二次正经 JSON 能救回来', async () => {
+  seed(5, '温');
+  const a = memory.add({ kind: 'chat', imp: 4, keys: ['g:9309'], text: '「群·9309」小温 提到在学吉他' });
+  // 第一次：纯文字（有内容但没 JSON）——looseJson 抛「没有 JSON」，走 ask 重试；不用空串，避免触发 chatRaw 自带的 3s 空回包重试
+  llmQueue.push({ content: '好的，我来想想……（这里只是一段话，没有 JSON）' });
+  llmQueue.push({ content: JSON.stringify({ insights: [{ text: '小温 在学吉他', from: [a.id], why: '群里提过' }], retire: [] }) });
+  const before = llmCalls.length;
+  const r = await mind.insight({ retryDelayMs: 0 });
+  assert.equal(llmCalls.length - before, 2, '调了两次模型（第一次纯文字，第二次 JSON）');
+  assert.equal(r.added.length, 1, '第二次的合法洞察救回来了，整晚不再空手');
+  const sent = llmCalls.slice(before).at(-1);
+  assert.ok(sent.temperature <= 0.3, `JSON 抽取任务温度压低了（实际 ${sent.temperature}），少发散`);
+});
+
+test('洞察重试耗尽：3 次都回纯文字，仍失败留痕（不放宽、不硬凑）', async () => {
+  seed(5, '耗');
+  store.logAction({ kind: 'test', detail: '垫一条' });
+  for (let i = 0; i < 3; i++) llmQueue.push({ content: '我实在想不出来写什么 JSON' });
+  const before = llmCalls.length;
+  const r = await mind.insight({ retryDelayMs: 0 });
+  assert.equal(llmCalls.length - before, 3, '最多重试到 3 次就停，不会无限循环');
+  assert.equal(r, null, '全失败仍返回 null，明晚再试');
+  assert.match(store.readActions().at(-1).detail, /洞察没跑成/, '失败留痕');
+});
+
+test('洞察 id 容错：#前缀/反引号/中文引号/大写/id标签/裸字符串 from 都认——但仍不放行假 id 和序号映射', async () => {
+  seed(5, '容');
+  const a = memory.add({ kind: 'chat', imp: 4, keys: ['g:9310'], text: '「群·9310」小容 说养了只猫' });
+  const uid = a.id.toUpperCase();
+  const variants = [`#${a.id}`, `\`${a.id}\``, `「${a.id}」`, `id: ${a.id}`, uid];
+  llmQueue.push({ content: JSON.stringify({ insights: [
+    { text: '小容 养了猫', from: variants, why: '提过' },
+    { text: '裸字符串 from 也救', from: a.id, why: '提过' }, // from 写成裸字符串而非数组
+    { text: '编造 id 仍要拒', from: ['deadbeef0000'], why: 'x' },
+    { text: '序号映射不放行', from: ['第3条'], why: 'x' },
+  ], retire: [] }) });
+  const r = await mind.insight({ retryDelayMs: 0 });
+  assert.equal(r.added.length, 2, '只有前两条真实 id 的洞察进流；编造 id 和「第3条」序号映射都被拒（校验没松）');
 });

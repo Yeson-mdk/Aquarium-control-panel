@@ -213,6 +213,8 @@ const routes = {
   'POST /api/memdb/search': async (_q, b) => ({ stats: memdb.stats(), hits: memdb.search(String(b?.q || ''), { k: 30, facts: true }) }), // 号主 facts 的留底一起搜（她的 recall 不带）
   'GET /api/memory': async () => ({ ...memory.memoryView(50), insightPending: mind.readMind().insightPending || [] }), // 记忆页：在记 / 印象 / 洞察各拉 50 条 + 档案规模 + 待审洞察
   'GET /api/friends': async () => friends.friendsView(), // 记忆页「朋友们」：档案 + 好感 + 朋友圈近况
+  // 朋友档案里删单条：带原文 expect 校验，中途被整理挤位就拒绝，不误伤别的记录
+  'POST /api/friends/note/delete': async (_q, b) => friends.deleteNote(b?.key, b?.i, b?.expect),
   // C4 删某人全部数据：先 preview 列清单给号主过目，确认后 POST 带 confirm=QQ 才实删
   'GET /api/friends/purge-preview': async (q) => purge.previewPerson(q.get('qq')),
   'POST /api/friends/purge': async (_q, b) => {

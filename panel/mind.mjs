@@ -127,8 +127,26 @@ const { fence } = llm;
 /** 窗外：查天气失败也别耽误刷 */
 const skyLine = () => sky.skyText().catch(() => `现在是 ${new Date().getHours()} 点。`);
 
-const ask = async (system, user, maxTokens = 500, opts = {}) =>
-  llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }], { maxTokens, tag: 'mind', ...opts }));
+/**
+ * 后台任务统一走这里：包一层 persona，只认 JSON。
+ * 网关偶发回纯文字 / 空回包（连 { 都没有，looseJson 直接抛「没有 JSON」）——可传 retries 隔几秒重试，
+ * 最多 3 次再认失败。默认 retries=0，老调用行为不变；只有洞察这种「非成功不可」的任务显式开。
+ * retries / retryDelayMs 是这里自己吃的，其余 opts（temperature / essential…）透传给 chatRaw。
+ */
+const ask = async (system, user, maxTokens = 500, opts = {}) => {
+  const { retries = 0, retryDelayMs = 2000, ...callOpts } = opts;
+  const messages = [{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return llm.looseJson(await llm.chat(messages, { maxTokens, tag: 'mind', ...callOpts }));
+    } catch (e) {
+      // 预算用完这类错重试也没用，别白等（chatRaw 里 essential 的任务本来也不受预算限）
+      if (/预算用完|额度用完/.test(String(e?.message || ''))) throw e;
+      if (attempt >= retries) throw e;
+      await new Promise((r) => setTimeout(r, retryDelayMs));
+    }
+  }
+};
 
 // 模型有时把「没有」「无」「照抄」这类占位话当成值填进来，当空的处理
 const str = (v, max) => {
@@ -457,7 +475,7 @@ ${thoughts.slice(-20).join('\n')}
  * 可被下一轮反思看到、可被推翻（retire）。归纳推理是幻觉第二大源头，护栏全压在「宁可少不要错」：
  * 上限 2 条；from 必须是输入里真实存在的记忆 id，写不出依据的整条忽略；只许归纳给到的素材。
  */
-export async function insight({ now = Date.now() } = {}) {
+export async function insight({ now = Date.now(), retryDelayMs = 2000 } = {}) {
   if (!mindOn()) return null;
   // 分层采样：watch（刷B站）封顶六成，把位置让给聊天/朋友/生活的记忆。
   // 她一天产的 watch 记忆天然最多，纯按「最近 25 条」会把社交全挤出去——洞察就全长在B站上，
@@ -500,17 +518,32 @@ ${view.insights.length > 150 ? '\n活着的洞察超过 150 条了：新洞察�
 - 宁可空着，不硬凑。
 输出：{"insights":[{"text":"结论","from":["id"],"why":"依据"}],"retire":["旧洞察id"]}`,
       800, // 600 也不够：flash 前置吃完就没地方写 JSON（2026-11-16 周日「今晚的洞察没跑成：没有 JSON」实测），到 800
-      { essential: true },
+      // JSON 抽取任务压低温度少发散；网关偶发回纯文字/空包（连 { 都没有）时隔 2 秒重试，最多 3 次。
+      // 注意：这只救「本来该出 JSON 却没出」的偶发，不放宽下面的 from 依据校验。
+      { essential: true, temperature: 0.15, retries: 2, retryDelayMs },
     );
     const added = [];
     const held = [];
-    // 素材里的 id 是 [abc123] 格式展示的，模型常连着括号/引号原样抄回来——先把这层皮剥了再精确匹配，
-    // 不然整晚的洞察全按「依据对不上」拒掉（2026-11-10 线上教训）。编造的 id 剥皮后照样对不上，闸没松。
-    const bareId = (v) => String(v).trim().replace(/^[\[\]"'\s]+/, '').replace(/[\[\]"'\s]+$/, '');
-    const gave = (Array.isArray(j.insights) ? j.insights : []).slice(0, 2);
+    // 素材里的 id 是 [abc123] 格式展示的，模型常连着包装原样抄回来——先把皮剥了再精确匹配，
+    // 不然整晚的洞察全按「依据对不上」拒掉（2026-11-10 线上教训，2026-11-22 又犯）。
+    // id 本身是纯 ASCII 小写字母数字（时间戳36 + 4位随机），所以首尾的非字母数字都是包装，可放心剥：
+    //   引号/括号/反引号/#号/中文标点/空白，以及模型偶尔加的「id: xxx」「编号 xxx」标签前缀。
+    // 整体小写归一（模型抄成大写也能认）。不做「第3条→第3个记忆」这类序号映射——那是替模型猜，
+    // 等于放宽校验，不要。剥完仍须精确命中 byId：编造或抄错的 id 照样对不上，校验闸一点没松。
+    const bareId = (v) => {
+      let s = String(v ?? '').trim().toLowerCase()
+        .replace(/^[`'「」『』【】\[\]()（）#＃*•\-—\s]+/, '')
+        .replace(/[`'「」『』【】\[\]()（）,，。.；;：:!！?？\s]+$/, '');
+      return s.replace(/^(?:id|编号|序号)\s*[:：]?\s*/, '');
+    };
+    // 模型偶尔把单元素数组写成裸字符串（from: "id" 而非 ["id"]）：包成单元素数组。
+    // 只是格式容错——里面是不是真实 id 仍由下面的 byId.has 精确判定，校验没松。
+    const asList = (v) => (Array.isArray(v) ? v : (v == null || v === '' ? [] : [v]));
+    const gave = asList(j.insights).slice(0, 2);
     for (const x of gave) {
+      if (!x || typeof x !== 'object') continue;
       const text = str(x.text, 120);
-      const from = [...new Set((Array.isArray(x.from) ? x.from : []).map(bareId))].filter((id) => byId.has(id));
+      const from = [...new Set(asList(x.from).map(bareId))].filter((id) => byId.has(id));
       if (!text || !from.length) continue; // 写不进真实 id 的依据不可信：整条忽略，宁可少不要错
       const why = str(x.why, 80);
       // B2：洞察继承证据来源的 keys（并集，去掉 owner——号主私事不能因为被归纳过就漏给外人看）。
@@ -527,7 +560,7 @@ ${view.insights.length > 150 ? '\n活着的洞察超过 150 条了：新洞察�
       logAction({ kind: 'mind', source: 'auto', ok: false, detail: `💭 今晚的洞察 ${held.length} 条待审（面板「记忆」页放行或丢掉）` });
     }
     let retired = 0;
-    for (const id of (Array.isArray(j.retire) ? j.retire : []).map(bareId)) if (oldIds.has(id) && memory.retire(id)) retired++;
+    for (const id of asList(j.retire).map(bareId)) if (oldIds.has(id) && memory.retire(id)) retired++;
     if (added.length || retired) logAction({ kind: 'mind', source: 'auto', detail: `💭 今晚的洞察：${added.length} 条${retired ? `，推翻 ${retired} 条旧的` : ''}` });
     // 全军覆没也要留痕：模型给了条目但一条都没过校验，和「模型没给」在日志上分不开的话没法排查
     if (gave.length && !added.length && !held.length && !retired) logAction({ kind: 'mind', source: 'auto', ok: false, detail: `💭 今晚的洞察：模型给了 ${gave.length} 条，但依据 id 全对不上，一条都没进流` });

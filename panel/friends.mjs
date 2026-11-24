@@ -7,6 +7,7 @@
  *
  * - touch(qq, name, group)：这人说话了——没有档案就建，有了就刷新名字和最近活跃
  * - addNote(key, text)：往某人档案里记一笔（每晚整理时从聊天里提炼）
+ * - deleteNote：面板上删单条记录（带原文校验，防止整理挤位后删错）
  * - notesText(qq)：跟这人私聊时带的档案
  * - rosterText(group)：群聊时带的「这个群里的人你知道的」
  * - friendsText()：号主上下文里的朋友圈名录（带好感 + 最近的朋友圈近况）
@@ -95,6 +96,33 @@ export function deleteFriend(key) {
   return gone;
 }
 
+/** 按档案 key 找人：qq 或「n:名字」占位档都认 */
+function findFriend(d, key) {
+  const k = String(key || '');
+  if (!k) return null;
+  return d.friends[k] || Object.values(d.friends).find((f) => f.qq === k) || null;
+}
+
+/** 定位面板上看到的那一条：i 是 notes 原始下标，expect 是当时显示的原文（防止中途被整理/新增挤位后删错人） */
+function noteSlot(d, key, i, expect) {
+  const f = findFriend(d, key);
+  if (!f) return { error: '没找到这个人的档案' };
+  const idx = Number(i);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= f.notes.length) return { error: '这条已经不在了，刷新再试' };
+  if (expect != null && f.notes[idx].text !== String(expect)) return { error: '这条已经变了，刷新再试' };
+  return { f, idx };
+}
+
+/** 删掉关于某人的一条记录。返回 {ok, note} 或 {ok:false, error} */
+export function deleteNote(key, i, expect) {
+  const d = readFriends();
+  const slot = noteSlot(d, key, i, expect);
+  if (slot.error) return { ok: false, error: slot.error };
+  const [gone] = slot.f.notes.splice(slot.idx, 1);
+  writeFriends(d);
+  return { ok: true, note: gone };
+}
+
 /** 私聊时带的：这个人你知道的 */
 export function notesText(qq) {
   const f = readFriends().friends[String(qq || '')];
@@ -136,14 +164,15 @@ export function friendsText(k = 8) {
 export function friendsView() {
   const d = readFriends();
   const favs = fav.readFav().users || {};
-  const list = Object.values(d.friends)
-    .filter((f) => f.notes.length || favs[f.qq]?.activeDays)
-    .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')))
-    .map((f) => ({
-      qq: f.qq, name: f.name, groups: (f.groups || []).map((g) => String(g).slice(2)),
+  const list = Object.entries(d.friends)
+    .filter(([, f]) => f.notes.length || favs[f.qq]?.activeDays)
+    .sort((a, b) => String(b[1].lastSeen || '').localeCompare(String(a[1].lastSeen || '')))
+    .map(([key, f]) => ({
+      key, qq: f.qq, name: f.name, groups: (f.groups || []).map((g) => String(g).slice(2)),
       firstMet: f.firstMet, lastSeen: f.lastSeen,
       fav: favs[f.qq] ? { fav: favs[f.qq].fav, days: favs[f.qq].activeDays } : null,
-      notes: f.notes.slice(-10),
+      // i 是 notes 原始下标，面板改/删时拿它定位；别用展示顺序，那是在前端倒过来的
+      notes: f.notes.map((n, i) => ({ ...n, i })).slice(-10),
     }));
   return { count: list.length, social: recentSocial() || null, list };
 }

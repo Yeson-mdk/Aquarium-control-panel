@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import './_env.mjs';
 import { isThinkingOutLoud, isMetaSelfTalk, tidyReply, punHint, toolDefs } from '../qq/brain.mjs';
+import * as prompts from '../qq/prompts.mjs';
 
 test('思考泄漏 1：线上原句——自述+末尾 SKIP（中文句号）该吞', () => {
   const line = '他还在“？”我，我上句接的是存不存图片那事，已经翻篇了。这会儿没什么新的，SKIP。';
@@ -93,4 +94,23 @@ test('元自我审视 4：不误伤——正常聊天里的「换说法」「合
     '这样回他合不合适呀',
     '你觉得我这么说行不行',
   ]) assert.equal(isMetaSelfTalk(t), false, `不该吞：${t}`);
+});
+
+test('数图片次数：线上原句「这嘴张第二回了」当元信息滤掉，整行不发出去', () => {
+  const line = '这嘴张第二回了，等着谁给你塞一口呀';
+  assert.equal(isMetaSelfTalk(line), true, '翻聊天记录数出的遍数该吞');
+  assert.equal(tidyReply(line), '', 'tidyReply 统一出路口也清掉');
+  for (const t of [
+    '这张图我看了三回还是觉得好看',
+    '你第二次放我鸽子我可记着呢',
+    '这个表情包发过两回我都存了', // 虽然带「发过两回」，但少「第N回」+「发/张/出现」紧邻结构，不误伤
+  ]) assert.equal(isMetaSelfTalk(t), false, `正常计数不该吞：${t}`);
+});
+
+test('提示层：三份 HOW 都明确要求别数图片/表情的重复遍数', () => {
+  const { HOW, HOW_PUBLIC, HOW_GROUP } = prompts;
+  for (const [name, p] of [['号主私聊', HOW], ['陌生人', HOW_PUBLIC], ['群聊', HOW_GROUP]]) {
+    assert.match(p, /别数图片\/表情的次数/, `${name} 提示有「别数次数」小节`);
+    assert.match(p, /第几回|发过两次了/, `${name} 提示点名了「第几回」这类话术`);
+  }
 });
