@@ -539,3 +539,86 @@ details.cfg-fold .cfg-grid { padding: 4px 12px 12px; }
   .qq-grid { grid-template-columns: 1fr; }
   .qq-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ── 手感调参页：试算结果卡 / 分组参数 / 实时改动 / 常驻保存栏 ── */
+.tuneCard { display: grid; gap: 16px; }
+.tune-try { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+.tune-try-in { min-width: 0; }
+.tune-try-in .card-h { margin-bottom: 10px; }
+.tune-try-in .hint { margin-top: 8px; line-height: 1.6; }
+.tune-try-out {
+  border-left: 1px dashed var(--line2); padding-left: 18px; min-width: 0;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.tune-try-empty { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.tune-verdict { display: flex; gap: 14px; align-items: center; }
+.tune-score {
+  font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -.03em; flex: none;
+  background: linear-gradient(135deg, var(--blue), var(--violet));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.tune-score small { font-size: 12px; font-weight: 500; margin-left: 2px; -webkit-text-fill-color: var(--muted); }
+.tune-verdict.review .tune-score { background-image: linear-gradient(135deg, var(--amber), var(--pink)); }
+.tune-verdict.skip .tune-score, .tune-verdict.reject .tune-score { background-image: linear-gradient(135deg, var(--muted), var(--text2)); }
+.tune-verdict-b { min-width: 0; }
+.tune-reasons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.tune-reasons span { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--card2); color: var(--text2); border: 1px solid var(--line); }
+.tune-fav { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; color: var(--text2); line-height: 1.6; }
+.tune-fav.warn { color: var(--amber); }
+.tune-workspace { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, .85fr); gap: 16px; align-items: start; }
+.tune-params { min-width: 0; }
+.tune-params:hover { transform: none; }
+.tune-status { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.tune-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.tune-status.ok { color: var(--green); }
+.tune-status.ok::before { background: var(--green); }
+.tune-status.dirty { color: var(--amber); }
+.tune-status.dirty::before { background: var(--amber); }
+.tune-sec { border: 1px solid var(--line); border-radius: 12px; background: var(--card2); margin-bottom: 10px; }
+.tune-sec > summary {
+  cursor: pointer; padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+  list-style: none; user-select: none; border-radius: 12px; transition: background .15s;
+}
+.tune-sec > summary::-webkit-details-marker { display: none; }
+.tune-sec > summary::before { content: '▸'; font-size: 10px; color: var(--muted); transition: transform .15s; flex: none; }
+.tune-sec[open] > summary::before { transform: rotate(90deg); }
+.tune-sec > summary:hover { background: color-mix(in srgb, var(--card) 70%, transparent); }
+.tune-sec-t { display: inline-flex; align-items: center; gap: 7px; font-weight: 700; font-size: 13px; }
+.tune-sec-t::before { content: ''; width: 3px; height: 13px; border-radius: 2px; flex: none; background: linear-gradient(180deg, var(--blue), var(--violet)); }
+.tune-sec-meta { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.tune-n, .tune-chg { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--card); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.tune-chg.on { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
+.tune-grid { padding: 2px 12px 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.tune-field { padding: 6px 8px; border: 1px solid transparent; border-radius: 9px; transition: background .15s, border-color .15s; }
+.tune-field:hover { background: var(--card); border-color: var(--line); }
+.tune-field.changed { background: var(--amber-soft); }
+.tune-field .f { margin-bottom: 3px; font-size: 12px; line-height: 1.35; }
+.tune-field-row { display: flex; align-items: center; gap: 7px; }
+.tune-field-row input { padding: 6px 9px; font-size: 13px; }
+.tune-def { font-size: 10.5px; color: var(--muted); white-space: nowrap; flex: none; }
+.tune-def::before { content: '默认 '; }
+.tune-field.changed .tune-def { color: var(--amber); }
+.tune-savebar {
+  position: sticky; bottom: 0; z-index: 2; margin: 14px -18px -18px; padding: 12px 18px 16px;
+  background: linear-gradient(transparent, var(--card) 34%);
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+}
+.tune-side { display: grid; gap: 16px; min-width: 0; }
+.tune-diff-row { display: flex; align-items: baseline; gap: 6px; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+.tune-diff-row:last-child { border-bottom: 0; }
+.tune-diff-name { flex: 1; min-width: 0; color: var(--text2); }
+.tune-diff-val { color: var(--amber); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tune-restore { border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer; padding: 1px 4px; border-radius: 5px; flex: none; }
+.tune-restore:hover { background: var(--blue-soft); color: var(--blue); }
+details.tune-json > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 600; user-select: none; }
+details.tune-json > summary::-webkit-details-marker { display: none; }
+details.tune-json > summary > span:last-child { display: none; }
+details.tune-json > summary::after { content: '展开 ▾'; font-size: 11px; font-weight: 400; color: var(--muted); }
+details.tune-json[open] > summary::after { content: '收起 ▴'; }
+.tune-json textarea { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.55; }
+@media (max-width: 1100px) { .tune-workspace { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {
+  .tune-try { grid-template-columns: 1fr; }
+  .tune-try-out { border-left: 0; border-top: 1px dashed var(--line2); padding: 12px 0 0; }
+  .tune-grid { grid-template-columns: 1fr; }
+}

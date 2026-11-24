@@ -815,74 +815,139 @@ const TUNE_LABELS = {
 };
 const TUNE_SEC_TITLE = { topic: '打分权重（加多少分 / 减多少分）', gate: '闸口与限流', fav: '好感（涨多快 · 淡多快）', ctx: '记忆窗口（原文带几天，更早的归摘要和记忆层）', sticker: '表情包频率（几条消息配一张，1~10，写进她的说明书）' };
 async function pageTuning(main) {
-  main.innerHTML = head('手感调参', '她的手感全在这调：插嘴打分权重、限流、防抖，还有好感涨多快淡多快。改完点保存立刻生效，不用重启；插嘴的拿不准就先用「试算」看这句话会怎么判。',
+  main.innerHTML = head('手感调参', '插嘴打分权重、限流、防抖、好感涨落都在这调。改完点保存立刻生效；拿不准就先用「试算」看一句话会怎么判。',
     '<button class="btn sm ghost" id="tuningResetAll">恢复默认</button>') +
-    `<div class="grid g-3">
-      <div class="card span-2">
-        <div class="card-h"><h2>试算</h2><span class="small muted">拿一句群友可能说的话走一遍真打分（试算前会先保存下面填的值）</span></div>
-        <div class="row"><input id="topicTry" placeholder="比如：今天中午吃什么好" style="flex:1" autocomplete="off"><button class="btn sm" id="topicTryBtn">算一下</button></div>
-        <div class="hint" id="topicTryMsg">改完权重，拿同一句话再算一遍，看分数怎么动。</div>
-        <div class="cfg-grid qq-grid" id="tuningGrid" style="margin-top:10px"><div class="small muted">加载中…</div></div>
-        <div class="row" style="margin-top:12px"><button class="btn sm" id="tuningSave">保存</button><span class="small muted" id="tuningMsg"></span></div>
-      </div>
-      <div class="card">
-        <div class="card-h"><h2>改过哪些</h2></div>
-        <div id="tuneDiff" class="small" style="margin-bottom:12px">…</div>
-        <div class="card-h"><h2>直接编 JSON</h2></div>
-        <div class="hint" style="margin-bottom:6px">会一点格式的可以直接改这份（跟左边表格同步），应用时同样只认数字键。</div>
-        <textarea id="tuneRaw" rows="18" style="width:100%;font-family:monospace;font-size:11px" spellcheck="false"></textarea>
-        <div class="row" style="margin-top:8px"><button class="btn sm" id="tuneRawApply">按这份应用</button><span class="small muted" id="tuneRawMsg"></span></div>
+    `<div class="tuneCard">
+      <section class="card tune-try">
+        <div class="tune-try-in">
+          <div class="card-h"><h2>试算</h2><span class="small muted">拿一句群友可能说的话走一遍真打分</span></div>
+          <div class="row"><input id="topicTry" placeholder="比如：今天中午吃什么好" style="flex:1" autocomplete="off"><button class="btn sm primary" id="topicTryBtn">算一下</button></div>
+          <div class="hint">试算会先保存下面填的值，算的是当前手感。改完权重，拿同一句话再算一遍，看分数怎么动。</div>
+        </div>
+        <div class="tune-try-out" id="topicTryMsg"><div class="tune-try-empty">还没试过。写句话点「算一下」，分数、命中了什么、好感怎么判，都会显示在这里。</div></div>
+      </section>
+      <div class="tune-workspace">
+        <section class="card tune-params">
+          <div class="card-h"><h2>参数</h2><span class="tune-status" id="tuneStatus">加载中…</span></div>
+          <div id="tuningGrid" class="tune-grid-wrap"><div class="small muted">加载中…</div></div>
+          <div class="tune-savebar"><span class="small muted" id="tuningMsg"></span><button class="btn primary" id="tuningSave">保存手感</button></div>
+        </section>
+        <aside class="tune-side">
+          <section class="card">
+            <div class="card-h"><h2>改过哪些</h2><span class="chip" id="tuneDiffCount">0 项</span></div>
+            <div id="tuneDiff" class="small">…</div>
+          </section>
+          <details class="card tune-json">
+            <summary><span>直接编 JSON</span><span class="small muted">展开 ▾</span></summary>
+            <div class="hint" style="margin-bottom:6px">会一点格式的可以直接改这份（跟左边表格同步），应用时同样只认数字键。</div>
+            <textarea id="tuneRaw" rows="16" spellcheck="false"></textarea>
+            <div class="row" style="margin-top:8px"><button class="btn sm" id="tuneRawApply">按这份应用</button><span class="small muted" id="tuneRawMsg"></span></div>
+          </details>
+        </aside>
       </div>
     </div>`;
-  const render = (cur, defaults) => {
-    $('#tuningGrid').innerHTML = Object.entries(TUNE_LABELS).map(([sec, items]) =>
-      `<div class="wide" style="font-weight:700;font-size:12px;color:var(--muted);padding-top:8px">${TUNE_SEC_TITLE[sec] || sec}</div>` +
-      items.map(([k, label]) => `<div><label class="f">${label}</label><input type="number" step="any" data-tune="${sec}.${k}" value="${cur[sec][k]}" autocomplete="off"></div>`).join('')
-    ).join('');
-    const diff = [];
-    for (const sec of Object.keys(defaults)) for (const [k, d] of Object.entries(defaults[sec])) if (cur[sec][k] !== d) diff.push(`${TUNE_LABELS[sec]?.find(([kk]) => kk === k)?.[1] || `${sec}.${k}`}：${d} → ${cur[sec][k]}`);
-    $('#tuneDiff').innerHTML = diff.length ? diff.map((d) => `· ${esc(d)}`).join('<br>') : '<span class="muted">还没改过，全是默认手感</span>';
-    $('#tuneRaw').value = JSON.stringify({ topic: cur.topic, gate: cur.gate, fav: cur.fav, ctx: cur.ctx, sticker: cur.sticker }, null, 2);
-    $('#tuningMsg').textContent = '';
-  };
+  const snapshot = (obj) => Object.entries(TUNE_LABELS).map(([sec, items]) => items.map(([k]) => obj[sec]?.[k]).join(',')).join('|');
+  const setStatus = (text, kind) => { const el = $('#tuneStatus'); if (!el) return; el.textContent = text; el.className = 'tune-status ' + (kind || ''); };
   let defaults = null;
-  const load = async () => { const r = await api('/api/tuning'); defaults = r.defaults; render(r.current, r.defaults); };
-  await load().catch((err) => { $('#tuningGrid').innerHTML = `<span class="muted">参数读不到：${esc(err.message || err)}<br>（面板还在用旧版 panel.mjs 就是这个样子——上传新版并重启容器后再试）</span>`; });
+  let saved = '';
   const collect = () => {
     const body = { topic: {}, gate: {}, fav: {}, ctx: {}, sticker: {} };
     document.querySelectorAll('[data-tune]').forEach((inp) => { const [sec, k] = inp.dataset.tune.split('.'); const v = Number(inp.value); if (Number.isFinite(v)) body[sec][k] = v; });
     return body;
   };
+  const updateDiff = () => {
+    if (!defaults) return;
+    const body = collect();
+    const diff = [];
+    for (const inp of $$('[data-tune]')) {
+      const [sec, k] = inp.dataset.tune.split('.');
+      const d = defaults[sec]?.[k], v = body[sec]?.[k];
+      if (v !== d) diff.push({ sec, k, d, v, label: TUNE_LABELS[sec]?.find(([kk]) => kk === k)?.[1] || `${sec}.${k}` });
+    }
+    const dirty = snapshot(body) !== saved;
+    $('#tuneDiffCount').textContent = `${diff.length} 项`;
+    $('#tuneDiff').innerHTML = diff.length
+      ? diff.map((x) => `<div class="tune-diff-row"><span class="tune-diff-name">${esc(x.label)}</span><span class="tune-diff-val">${x.d} → ${x.v}</span><button class="tune-restore" data-restore="${x.sec}.${x.k}" title="填回默认 ${x.d}">还原</button></div>`).join('')
+      : '<span class="muted">还没改过，全是默认手感</span>';
+    $$('[data-tune]').forEach((inp) => {
+      const [sec, k] = inp.dataset.tune.split('.');
+      inp.closest('.tune-field')?.classList.toggle('changed', body[sec][k] !== defaults[sec][k]);
+    });
+    $$('.tune-sec').forEach((box) => {
+      const sec = box.dataset.sec;
+      const n = (TUNE_LABELS[sec] || []).filter(([k]) => body[sec][k] !== defaults[sec][k]).length;
+      const chip = $('.tune-chg', box);
+      if (!chip) return;
+      chip.textContent = `${n} 改`;
+      chip.classList.toggle('on', n > 0);
+    });
+    setStatus(dirty ? `${diff.length} 项改动未保存` : diff.length ? `已保存 · 改过 ${diff.length} 项` : '出厂手感', dirty ? 'dirty' : diff.length ? 'ok' : '');
+  };
+  const render = (cur) => {
+    $('#tuningGrid').innerHTML = Object.entries(TUNE_LABELS).map(([sec, items]) => {
+      const n = items.filter(([k]) => cur[sec][k] !== defaults[sec][k]).length;
+      return `<details class="tune-sec" data-sec="${sec}" open>
+        <summary><span class="tune-sec-t">${TUNE_SEC_TITLE[sec] || sec}</span><span class="tune-sec-meta"><span class="tune-n">${items.length} 项</span><span class="tune-chg${n ? ' on' : ''}">${n} 改</span></span></summary>
+        <div class="cfg-grid tune-grid">${items.map(([k, label]) => {
+          const v = cur[sec][k], d = defaults[sec][k];
+          return `<div class="tune-field${v !== d ? ' changed' : ''}" data-key="${sec}.${k}">
+            <label class="f">${esc(label)}</label>
+            <div class="tune-field-row"><input type="number" step="any" data-tune="${sec}.${k}" value="${v}" autocomplete="off"><span class="tune-def" title="默认值">${d}</span></div>
+          </div>`;
+        }).join('')}</div>
+      </details>`;
+    }).join('');
+    $('#tuneRaw').value = JSON.stringify({ topic: cur.topic, gate: cur.gate, fav: cur.fav, ctx: cur.ctx, sticker: cur.sticker }, null, 2);
+    saved = snapshot(cur);
+    updateDiff();
+    $('#tuningMsg').textContent = '';
+  };
+  const load = async () => { const r = await api('/api/tuning'); defaults = r.defaults; render(r.current); };
+  await load().catch((err) => { $('#tuningGrid').innerHTML = `<span class="muted">参数读不到：${esc(err.message || err)}<br>（面板还在用旧版 panel.mjs 就是这个样子——上传新版并重启容器后再试）</span>`; });
+  $('#tuningGrid').addEventListener('input', updateDiff);
+  $('#tuneDiff').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-restore]');
+    if (!b || !defaults) return;
+    const [sec, k] = b.dataset.restore.split('.');
+    const inp = document.querySelector(`[data-tune="${sec}.${k}"]`);
+    if (!inp) return;
+    inp.value = defaults[sec][k];
+    updateDiff();
+    toast('已填回默认值，记得保存');
+  });
   $('#tuningSave').onclick = (e) => busy(e.target, async () => {
     const r = await api('/api/tuning/save', collect());
-    render(r.current, defaults);
+    render(r.current);
     $('#tuningMsg').textContent = '✓ 存了，立刻生效，不用重启';
     toast('手感已保存');
   });
   $('#tuningResetAll').onclick = (e) => busy(e.target, async () => {
     if (!(await confirmBox('恢复默认手感？', '现在改过的值都会丢，回到出厂手感。', '恢复'))) return;
     const r = await api('/api/tuning/reset', {});
-    render(r.current, defaults);
+    render(r.current);
     toast('已恢复默认');
   });
   $('#tuneRawApply').onclick = (e) => busy(e.target, async () => {
     let body;
     try { body = JSON.parse($('#tuneRaw').value); } catch (err) { $('#tuneRawMsg').textContent = `JSON 写坏了：${err.message}`; return; }
     const r = await api('/api/tuning/save', body);
-    render(r.current, defaults);
+    render(r.current);
     $('#tuneRawMsg').textContent = '✓ 应用上了';
   });
   $('#topicTryBtn').onclick = (e) => busy(e.target, async () => {
     const text = $('#topicTry').value.trim();
-    if (!text) { $('#topicTryMsg').textContent = '先写句话呀'; return; }
+    if (!text) { $('#topicTryMsg').innerHTML = '<div class="tune-try-empty">先写句话呀。</div>'; return; }
     await api('/api/tuning/save', collect()); // 试算按当前填的值来，先存再算
     const r = await api('/api/qq/topic-preview', { text });
+    const verdict = { pass: ['直接过闸', 'green'], review: ['交给仲裁拿主意', 'amber'] }[r.status] || ['不接，潜水', ''];
     const favLine = r.favErr ? `⚠ 好感没判出来：${esc(r.favErr)} —— 这是调用失败不是结果，重试或查模型配置`
       : r.fav == null ? '⚠ 好感没判出来：模型回了话但格式没认出来，再算一次试试'
       : r.fav.d === 0 ? '好感：本句话好感无变动（判过了，平平无奇不记分）'
       : `好感：${r.fav.d > 0 ? '+' : ''}${r.fav.d}（${esc(r.fav.why)}）`;
-    $('#topicTryMsg').innerHTML = `${r.score} 分 → ${r.status === 'pass' ? '直接过闸' : r.status === 'review' ? '交给仲裁拿主意' : '不接，潜水'}（${r.reasons.join('、')}）<br>${favLine}`;
-    const cur = await api('/api/tuning'); render(cur.current, defaults);
+    $('#topicTryMsg').innerHTML =
+      `<div class="tune-verdict ${esc(r.status)}"><div class="tune-score">${r.score}<small>分</small></div><div class="tune-verdict-b"><span class="chip ${verdict[1]}">${verdict[0]}</span><div class="tune-reasons">${(r.reasons || []).map((x) => `<span>${esc(x)}</span>`).join('') || '<span>没命中加减分项</span>'}</div></div></div>` +
+      `<div class="tune-fav${r.favErr || r.fav == null ? ' warn' : ''}">${favLine}</div>`;
+    const cur = await api('/api/tuning'); render(cur.current);
   });
 }
 
