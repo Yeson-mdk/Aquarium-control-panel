@@ -7,16 +7,16 @@
  *   跟你的令牌权限无关，而且根本不含 embedding。真正的答案只能靠真打一条 /embeddings。
  *
  * 跑法（在 NAS 上，项目根目录）：
- *   node panel/probe-ms-models.mjs                      # 测面板当前配的接口 + 一组常见候选
- *   node panel/probe-ms-models.mjs BAAI/bge-m3 ...       # 追加/替换要测的模型 ID
- *   node panel/probe-ms-models.mjs --base https://api.siliconflow.cn/v1   # 临时换接口
+ *   node ops/probe-ms-models.mjs                      # 测面板当前配的接口 + 一组常见候选
+ *   node ops/probe-ms-models.mjs BAAI/bge-m3 ...       # 追加/替换要测的模型 ID
+ *   node ops/probe-ms-models.mjs --base https://api.siliconflow.cn/v1   # 临时换接口
  *
  * 默认读面板配置：接口 config.llm.embeddingBaseUrl（留空=魔搭）、
  * 密钥 secrets.embeddingApiKey（留空回退 modelscopeToken）。命令行参数只临时覆盖，不写盘。
  * 脚本不打印密钥、不写日志，只直连接口。
  */
-import { readConfig, readSecrets } from './store.mjs';
-import { embedUrl } from './llm.mjs';
+import { readConfig, readSecrets } from '../panel/store.mjs';
+import { embedUrl } from '../panel/llm.mjs';
 
 const MS_BASE = 'https://api-inference.modelscope.cn/v1';
 
@@ -95,7 +95,7 @@ console.log('\n===== 结果 =====');
 if (ok.length) {
   console.log(`能用的 embedding 模型 ${ok.length} 个，面板「模型 ID」可填：`);
   ok.forEach((r) => console.log(`  ✓ ${r.model}  （${r.dim} 维）`));
-  console.log('\n填好保存后点面板「测试向量模型」复核，再去 NAS 跑一次 node panel/backfill-vec.mjs 给旧记忆补向量。');
+  console.log('\n填好保存后点面板「测试向量模型」复核，再去 NAS 跑一次 node ops/backfill-vec.mjs 给旧记忆补向量。');
 } else {
   const auth = results.find((r) => /令牌|权限|实名|无效/.test(r.note));
   if (auth) console.log('看着像密钥/权限问题：' + auth.note);

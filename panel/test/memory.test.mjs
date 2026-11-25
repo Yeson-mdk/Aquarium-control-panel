@@ -122,6 +122,31 @@ test('memoryView：印象（gist/chat）和在记分开，档案有规模', () =
   assert.ok(typeof v.archive?.rows === 'number');
 });
 
+test('memoryView.gistsAll：日结刷满窗口时，面板仍能拿到全量印象（2026-11-25 回归）', () => {
+  // 印象先写、时间戳故意放老，再灌 12 条新日结把 n=5 的窗口占满
+  memory.add({ kind: 'gist', imp: 5, ts: new Date(Date.now() - 30 * 86400_000).toISOString(), text: '很早以前概括出来的一条印象' });
+  for (let i = 0; i < 12; i++) memory.add({ kind: 'chat', imp: 3, text: `跟号主聊天：第${i}次日结，聊了新梗和日常` });
+  const v = memory.memoryView(5);
+  assert.equal(v.gists.length, 5, 'gists 仍是 n 条窗口，人设更新/自检的语义不能变');
+  assert.ok(!v.gists.some((e) => e.text.includes('很早以前')), '老的印象确实被 n 条窗口挤出去');
+  assert.ok(v.gistsAll.some((e) => e.text.includes('很早以前')), 'gistsAll 必须带上被挤出去的老印象');
+  assert.equal(v.gistsAll.filter((e) => e.kind === 'gist' || e.kind === 'chat').length, v.gistsAll.length, 'gistsAll 只含 gist/chat');
+  assert.ok(v.gistCount >= v.gistsAll.length, 'gistCount 是全量计数，不该小于 gistsAll');
+});
+
+test('memoryView.days：群背景刷满 recent 窗口，刷视频经历仍完整出现在日子（2026-11-25 回归）', () => {
+  // 造 60 条高频群背景，把 memoryView(5) 的 recent 窗口彻底占满
+  for (let i = 0; i < 60; i++) memory.add({ kind: 'background', imp: 1, text: `群里闲聊第${i}句，说的都是些不相干的事` });
+  memory.add({ kind: 'watch', imp: 3, text: '看了《刷了很久的那期视频》' });
+  memory.add({ kind: 'session', imp: 3, text: '这一轮刷了五条，写两句感想' });
+  const v = memory.memoryView(5);
+  assert.ok(v.recent.length === 5, 'recent 只取 5 条，窗口很窄');
+  assert.ok(v.days.filter((e) => e.kind === 'background').length === 0, 'days 不受群背景数量影响，全部排除');
+  assert.ok(v.days.some((e) => e.text.includes('刷了很久的那期视频')), '刷视频经历仍在 days 里');
+  assert.ok(v.days.some((e) => e.text.includes('这一轮刷了五条')), 'session 经历仍在 days 里');
+  assert.ok(v.days.every((e) => !['chat', 'background', 'big_event', 'self', 'gist'].includes(e.kind)), 'days 只含亲身经历，没有群背景噪音');
+});
+
 test('mergeGroups：每晚的聊天日结也参与合并', () => {
   const all = [1, 2, 3].map((i) => E({ kind: 'chat', imp: 3, ts: iso(5 + i), text: `跟号主聊天：第${i}次聊到想换新显卡这件事` }));
   const g = memory.mergeGroups(all, now);

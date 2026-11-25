@@ -68,7 +68,7 @@ test('6. missingVecIds：补过的跳过，没补的还在（断点续传）', (
 });
 
 test('7. backfill 假接口：分批补、跳过已有、接口挂了不炸', async () => {
-  const { backfill } = await import('../backfill-vec.mjs');
+  const { backfill } = await import('../../ops/backfill-vec.mjs');
   const a = memory.add({ kind: 'watch', text: '回填测试A vecbf1', imp: 2 });
   const b = memory.add({ kind: 'watch', text: '回填测试B vecbf2', imp: 2 });
   const calls = [];

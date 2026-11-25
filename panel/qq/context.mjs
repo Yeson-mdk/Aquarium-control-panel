@@ -21,10 +21,13 @@ import { readConfig, readReview, readTasks, readPause, localDate } from '../stor
 
 const hm = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
-/** 今天她自己的经历（刷了什么、跟谁聊了），给她聊天时自然提起 */
+/** 今天她自己的经历（刷了什么、跟谁聊了），给她聊天时自然提起。
+ *  排除 chat（对话日结）和 background/big_event（群里听说的，不是她亲身经历，不占这 8 个名额）；
+ *  群背景仍会被当天的反思与晨间计划通过 recall 看到，不影响序9/序10 的本意 */
 function todayLife(today = localDate()) {
+  const SKIP = new Set(['chat', 'background', 'big_event']);
   return memory.memoryView(40).recent
-    .filter((e) => localDate(new Date(e.ts)) === today && e.kind !== 'chat')
+    .filter((e) => localDate(new Date(e.ts)) === today && !SKIP.has(e.kind))
     .slice(0, 8).map((e) => `- ${hm(e.ts)} ${e.text}`).join('\n');
 }
 

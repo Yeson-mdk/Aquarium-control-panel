@@ -263,12 +263,13 @@ const routes = {
     return r;
   },
 
-  // 活动记录（插嘴裁决有专属板块，这里不掺：不带 kind 查询时把 gate 类和旧记录里混着的裁决一并剔掉）
+  // 活动记录（gate 裁决、perceive 群背景都有专属板块，这里不掺：
+  //   不带 kind 查询时把这两类和旧记录里混着的裁决一并剔掉；big_event 大事件、reflect_event 轻反思保留在这里）
   'GET /api/actions': async (q) => {
     let list = readActions();
     const kind = q.get('kind'); const source = q.get('source'); const date = q.get('date'); const s = q.get('q');
     if (kind) { const ks = kind.split(','); list = list.filter((a) => ks.includes(a.kind) || (ks.includes('gate') && a.kind === 'qq' && /插嘴|机器人消息只接点名|机器人名单：/.test(a.detail || ''))); } // gate 单独板块：旧记录混在 qq 类里，按 🎯 前缀捞回来
-    else list = list.filter((a) => a.kind !== 'gate' && !(a.kind === 'qq' && /插嘴|连发熔断|机器人消息只接点名|机器人名单：/.test(a.detail || '')));
+    else list = list.filter((a) => a.kind !== 'gate' && a.kind !== 'perceive' && !(a.kind === 'qq' && /插嘴|连发熔断|机器人消息只接点名|机器人名单：/.test(a.detail || '')));
     if (source) list = list.filter((a) => a.source === source || (!a.source && source === 'panel'));
     if (date) list = list.filter((a) => localDate(new Date(a.ts)) === date);
     if (s) list = list.filter((a) => `${a.title} ${a.detail} ${a.target}`.includes(s));

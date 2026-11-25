@@ -17,7 +17,7 @@ const server = createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 
-const store = await import('../store.mjs');
+const store = await import('../panel/store.mjs');
 store.writeConfig({
   llm: { baseUrl: `http://127.0.0.1:${server.address().port}`, model: 'dump' },
   sky: { enabled: false },
@@ -25,8 +25,8 @@ store.writeConfig({
 });
 store.writeSecrets({ llmApiKey: 'x' });
 
-const brain = await import('../qq/brain.mjs');
-const owner = await import('../qq/owner.mjs');
+const brain = await import('../panel/qq/brain.mjs');
+const owner = await import('../panel/qq/owner.mjs');
 
 // 铺一点群聊历史（10 条），让「历史块」的大小真实；其他动态块（好感/朋友圈/群友名录）本地数据为空，报告里注明
 for (let i = 0; i < 10; i++) {
@@ -63,7 +63,7 @@ for (const [label, req] of Object.entries(grabs)) {
   }
   out += `#### 工具（${(req.tools || []).length} 个）：${(req.tools || []).map((t) => t.function.name).join('、')}\n\n`;
 }
-writeFileSync(join(import.meta.dirname, '../../clone/提示词拼接-20261110.md'), out);
+writeFileSync(join(import.meta.dirname, '../clone/提示词拼接-20261110.md'), out);
 console.log('written, group sys chars:', String(grabs['群聊（好友发言，被@路径）'].messages[0].content).length);
 server.close();
 process.exit(0);

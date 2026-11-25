@@ -405,6 +405,7 @@ test('阶段一 digestGroup：冷清水楼不结、人名校验丢编造、imp �
     ...Array.from({ length: 8 }, (_, i) => ({ text: `小零说了件凑数的事第${i}件`, imp: 2, src: ['正经话'] })),
   ] }) });
   const r = await owner.digestGroup(g, { remember: rem });
+  assert.equal(llmCalls.at(-1).temperature, 0.15, '日结走低温，压住超长 prompt 下的输出跑偏');
   assert.equal(r.items, 8, '10 条合法条目只留 imp 最高的 8 条');
   assert.ok(added.every((x) => (x.keys || []).includes(g)), '日结条目带对话钥匙（g:群号），合成印象按对话归组用');
   assert.equal(r.meanImp, 2.5, '均值 = (5+3+2×6)/8');
@@ -439,12 +440,27 @@ test('阶段一 digestGroup：同人连发合并、超 150 条只留最近、坏
   assert.ok(!body.includes('水文第0条'), '最早的水文被挤出窗口');
   assert.ok(body.includes('水文第159条'), '最新的留在');
   llmQueue.length = 0;
-  // 坏 JSON：条目解析成空、不炸
+  // 坏 JSON：先吐纯文字、第二次给合法 JSON——重试捞回来，不再静默记 0 条
   const g3 = 'g:9004';
   for (let i = 0; i < 6; i++) owner.logChat({ from: 'owner', name: '小零', text: `普通聊天第${i}句`, peer: g3 });
-  llmQueue.push({ content: '咕咕咕这不是JSON' });
+  llmQueue.push({ content: '咕咕咕这不是JSON' }, { content: '{"memory":"聊了日常","items":[{"text":"小零提到普通聊天的事","imp":3,"src":[]}]}' });
+  const callsBefore = llmCalls.length;
   const r3 = await owner.digestGroup(g3, { remember: () => {} });
-  assert.equal(r3.items, 0, '坏 JSON 条目为空但不报错');
+  assert.equal(r3.items, 1, '坏 JSON 重试后捞回条目');
+  assert.equal(llmCalls.length - callsBefore, 2, '解析失败只重试一次就成功，不空转');
+  llmQueue.length = 0;
+});
+
+test('阶段一 digestGroup：解析彻底失败打告警留原始输出，不再静默记 0 条（2026-11-25 回归）', async () => {
+  const g = 'g:9011';
+  for (let i = 0; i < 6; i++) owner.logChat({ from: 'owner', name: '小零', text: `没关系第${i}句`, peer: g });
+  // 三次都吐纯文字（mock 队列耗尽会回「嗯嗯」也是 JSON 解析失败，但原始输出就丢了）
+  llmQueue.push({ content: '今天群里净是图片，也没什么好记的' }, { content: '今天群里净是图片，也没什么好记的' }, { content: '今天群里净是图片，也没什么好记的' });
+  const before = store.readActions().length;
+  const r = await owner.digestGroup(g, { remember: () => {} });
+  assert.equal(r.items, 0, '全失败仍是 0 条，不炸');
+  const added = store.readActions().slice(before);
+  assert.ok(added.some((a) => /日结没能解析/.test(a.detail || '') && /今天群里净是图片/.test(a.detail || '')), '告警日志带原始输出，能分辨调用失败还是真判空');
   llmQueue.length = 0;
 });
 
@@ -515,14 +531,16 @@ test('digestToday：窗口也从上次时间戳切，昨晚 23 点的话不再�
 
 test('reachOutDue：白天、他很久没说话、今天还没找够才找', () => {
   const cfg = { reachOut: true, reachOutMax: 1, silentHours: 4, activeStart: 9, activeEnd: 22 };
-  const noon = new Date(2026, 9, 25, 14, 0).getTime();
-  const night = new Date(2026, 9, 25, 23, 30).getTime();
+  // 基准动态取「30 天后的下午」——写死日期会被现实追上（2026-11-24 真的到来了就挂），偏移量才活得久
+  const noon = (() => { const d = new Date(); d.setDate(d.getDate() + 30); d.setHours(14, 0, 0, 0); return d.getTime(); })();
+  const night = noon + 9.5 * 3600_000; // 同一天 23:30
+  const dayStr = new Date(noon).toLocaleDateString('sv'); // YYYY-MM-DD，跟 reachOut 状态里的日期格式对齐
   // 聊天记录里最后一条是刚才的（上面几个测试写的），所以先当他刚说过话
   assert.equal(brain.reachOutDue(Date.now(), cfg, {}), false, '他刚说过话');
-  assert.equal(brain.reachOutDue(noon + 86400_000 * 30, cfg, {}), true, '一个月后的下午');
-  assert.equal(brain.reachOutDue(night + 86400_000 * 30, cfg, {}), false, '深夜不找');
-  assert.equal(brain.reachOutDue(noon + 86400_000 * 30, cfg, { reachOut: { date: '2026-11-24', n: 1 } }), false, '今天找够了');
-  assert.equal(brain.reachOutDue(noon + 86400_000 * 30, { ...cfg, reachOut: false }, {}), false, '关了');
+  assert.equal(brain.reachOutDue(noon, cfg, {}), true, '一个月后的下午');
+  assert.equal(brain.reachOutDue(night, cfg, {}), false, '深夜不找');
+  assert.equal(brain.reachOutDue(noon, cfg, { reachOut: { date: dayStr, n: 1 } }), false, '今天找够了');
+  assert.equal(brain.reachOutDue(noon, { ...cfg, reachOut: false }, {}), false, '关了');
 });
 
 test('整条链路：号主连发两条 → 合成一次回 → 发回去；陌生人不理', async () => {
@@ -2066,4 +2084,38 @@ test('B1 recall_here：群友触景生情只翻本对话，号主私聊/别的�
     rmSync(fHere, { force: true });
     rmSync(fOther, { force: true });
   }
+});
+
+test('八股历史降权：她过去的八股回复不逐字进上下文，降成大意当不成范文', async () => {
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, audience: 'public' } });
+  // 用独立好友会话（p:59999），不往 owner 记录里写东西——后面有测试靠 owner 记录「最后一条是刚才」过日子
+  owner.logChat({ from: 'her', text: '说白了，这个账我记住了', peer: 'p:59999' });
+  owner.logChat({ from: 'her', text: '嗯嗯，我在呢，刚去接水了', peer: 'p:59999' });
+  llmQueue.push({ content: '嗯嗯' });
+  const callsBefore = llmCalls.length;
+  await brain.reply('你在干嘛', { qq: '59999', peer: 'p:59999', fids: [] });
+  const msgs = llmCalls.at(-1).messages;
+  const deg = msgs.find((m) => m.role === 'assistant' && m.content.includes('有一次说得比较僵'));
+  assert.ok(deg, '八股历史被降权成「大意」');
+  assert.ok(deg.content.includes('说白了'), '大意里保留原文开头，看得出当时聊什么');
+  assert.ok(!msgs.some((m) => m.role === 'assistant' && /说白了，这个账我记住了$/.test(m.content.trim())), '八股原文不再逐字进上下文当范文');
+  const normal = msgs.find((m) => m.role === 'assistant' && m.content.includes('刚去接水了'));
+  assert.ok(normal, '正常话的历史原样保留，不受牵连');
+  assert.equal(llmCalls.length, callsBefore + 1, '正常回复不多调模型');
+});
+
+test('八股重roll：出口命中 ≥2 类就重答一次，新答案更干净才采纳', async () => {
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, audience: 'public' } });
+  // 第一发八股（降维断言 + 签收腔），重roll 第二发干净 → 采纳第二条
+  llmQueue.push({ content: '说白了，这个账我记住了，这事就这么定了' }, { content: '嗯嗯，我记着呢，你别急呀' });
+  const callsBefore = llmCalls.length;
+  const r = await brain.reply('那这事咋办', { qq: '10086', peer: 'owner', fids: [] });
+  assert.equal(r.text, '嗯嗯，我记着呢，你别急呀', '采纳了重roll后更干净的回复');
+  assert.equal(llmCalls.length - callsBefore, 2, '八股触发了一次重roll（共两次调用）');
+  // 干净回复不重roll：一次调用就完
+  llmQueue.push({ content: '好呀，那你先忙' });
+  const before2 = llmCalls.length;
+  const r2 = await brain.reply('那我先去忙啦', { qq: '10086', peer: 'owner', fids: [] });
+  assert.equal(r2.text, '好呀，那你先忙', '干净回复原样通过');
+  assert.equal(llmCalls.length - before2, 1, '不八股不重roll，只调一次');
 });

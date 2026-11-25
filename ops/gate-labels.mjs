@@ -5,17 +5,17 @@
  * 「她为什么没回」从那份账里查。本模块补的是另一半：攒一份「该回/不该回」的人工标注集，
  * 改权重前后各跑一遍，看翻案数，别凭感觉调 topic 那堆数字。
  *
- *   node panel/gate-labels.mjs import           从 actions 的 gate 日志导候选消息（去重）
- *   node panel/gate-labels.mjs label <id> 1|0   标注该回(1)/不该回(0)，0 也可传 '' 清空
- *   node panel/gate-labels.mjs score            用当前 tuning 权重重跑，输出一致率/翻案数
- *   node panel/gate-labels.mjs list             看标注集
+ *   node ops/gate-labels.mjs import           从 actions 的 gate 日志导候选消息（去重）
+ *   node ops/gate-labels.mjs label <id> 1|0   标注该回(1)/不该回(0)，0 也可传 '' 清空
+ *   node ops/gate-labels.mjs score            用当前 tuning 权重重跑，输出一致率/翻案数
+ *   node ops/gate-labels.mjs list             看标注集
  *
  * 数据：data/gate-labels.jsonl（一行一条，人能直接编辑 label 字段）
  */
 import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, readActions, nowIso } from './store.mjs';
-import { topicScoreMessage } from './qq/brain.mjs';
+import { DATA, readActions, nowIso } from '../panel/store.mjs';
+import { topicScoreMessage } from '../panel/qq/brain.mjs';
 
 const FILE = join(DATA, 'gate-labels.jsonl');
 const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 120);

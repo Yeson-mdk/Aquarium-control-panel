@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import './_env.mjs';
 
 const { appendJsonl, FILES } = await import('../store.mjs');
-const gl = await import('../gate-labels.mjs');
+const gl = await import('../../ops/gate-labels.mjs');
 
 function seedGates() {
   const mk = (text, verdict, score, peer = 'g:1') => ({

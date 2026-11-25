@@ -110,7 +110,7 @@ const PAGES = [
   { id: 'memory', name: '记忆', icon: 'layers' },
   { id: 'stickers', name: '表情包', icon: 'image' },
   { id: 'tuning', name: '手感调参', icon: 'sliders' },
-  { id: 'gate', name: '插嘴裁决', icon: 'shield' },
+  { id: 'gate', name: '群聊感知', icon: 'shield' },
   { id: 'botscore', name: '谁像bot', icon: 'scan' },
   { id: 'diary', name: '养鱼日记', icon: 'book' },
 ];
@@ -123,6 +123,7 @@ const KIND = {
   cooldown: ['🧊', '风控冷却'], pause: ['⏸', '号主叫停'], health: ['🩺', 'QQ 接入'], qq: ['💬', 'QQ 小号'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'], gate: ['🎯', '插嘴裁决'],
+  perceive: ['👂', '群背景'], big_event: ['⚡', '大事件'], reflect_event: ['⚡', '大事件轻反思'],
   join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
   appointment: ['📅', '约定'], appointment_set: ['⏰', '约定'],
 };
@@ -308,24 +309,36 @@ async function renderDay(el) {
 }
 
 // 记忆分三层展示：印象（她概括的）/ 在记（还记得的零碎）/ 淡忘档案（忘了但搜得回来）
-const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙', gist: '🧩', chat: '🗨️', fact: '👤' };
+const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙', gist: '🧩', chat: '🗨️', fact: '👤', background: '👂', big_event: '⚡' };
 // 计划反馈（阶段三）现在靠开头认；B段会给新记忆加 tag 字段，两条路都认
 const memIcon = (e) => (e.tag === 'plan' || /^今天的计划里/.test(e.text || '') ? '📋' : MEM_KIND[e.kind] || '•');
-const memRow = (e) => `<li><div style="flex:1;min-width:0" class="small">${memIcon(e)} ${esc(e.text)}
-    <div class="muted">${ago(e.ts)} · 重要 ${e.imp}/5${e.from ? ` · ${e.from} 条合成的` : ''}${e.n ? ` · 想起过 ${e.n} 次` : ''}${e.edited ? ' · 你改过' : ''}</div></div>
-    <button class="btn sm ghost" data-memedit="${esc(e.id)}" title="改这条">✎</button>
-    <button class="btn sm ghost" data-memdel="${esc(e.id)}" title="删掉这条">✕</button></li>`;
+const memRow = (e) => `<li class="mem-entry">
+    <span class="mem-entry-ico">${memIcon(e)}</span>
+    <div class="mem-entry-body">
+      <div class="mem-entry-text">${esc(e.text)}</div>
+      <div class="mem-meta">${ago(e.ts)}<span class="mem-dot">·</span>重要 ${e.imp}/5${e.from ? `<span class="mem-dot">·</span>${esc(e.from)} 条合成的` : ''}${e.n ? `<span class="mem-dot">·</span>想起过 ${e.n} 次` : ''}${e.edited ? '<span class="mem-dot">·</span>你改过' : ''}</div>
+    </div>
+    <span class="mem-entry-act">
+      <button class="btn sm ghost" data-memedit="${esc(e.id)}" title="改这条">✎</button>
+      <button class="btn sm ghost" data-memdel="${esc(e.id)}" title="删掉这条">✕</button>
+    </span></li>`;
+// 分组头：展开的「今天 / 印象」和折叠的「更早 / 被推翻」共用一套样式，避免两种视觉语言
+const memGroupHead = (title, count, note = '') => `<span class="mem-group-h"><span class="mem-group-t">${title}</span>${count != null ? `<span class="mem-group-n">${count} 条</span>` : ''}${note ? `<span class="mem-group-note">${note}</span>` : ''}</span>`;
+const memList = (rows, rowFn = memRow) => `<ul class="mem-list">${rows.map(rowFn).join('')}</ul>`;
+// 日期键：本地时区的 YYYY-MM-DD，跟 <input type="date"> 的 value 对齐（getMonth 是 0-based，别忘 +1）
+const memDayKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 // 「她自己的」分四个子标签：日子（经历，按天分组）/ 想法（洞察与内心）/ 印象·日结（压缩层）/ 档案（淡忘原文搜索）
 function renderMemories(box, mem) {
   if (!box) return;
-  const gists = mem?.gists || [];
+  const gists = mem?.gistsAll || mem?.gists || []; // 优先后端全量；老面板没 gistsAll 时退回 50 条窗口
   const impr = gists.filter((e) => e.kind !== 'chat');   // 她自己概括的印象
   const chats = gists.filter((e) => e.kind === 'chat');  // 每晚的对话日结（号主/群/好友）
   const keep = (mem?.recent || []).filter((e) => e.kind !== 'gist' && e.kind !== 'chat');
   const ideas = mem?.insights || keep.filter((e) => e.kind === 'self'); // 洞察 + 反思结论（活着的；B段起日间复盘/发呆也进这）
-  const days = keep.filter((e) => e.kind !== 'self');    // 日子：发生过的经历（B站、计划执行、别的零碎）
-  const chatShow = chats.slice(0, 12); // 日结条数多，只列最近的，老的几天后会合成印象
-  const list = [...gists, ...keep]; // 改 / 删按钮按 id 找条目用
+  // 日子读后端给的全量经历（mem.days），不从 recent 里筛——群背景/日结高频时会把
+  // 最近 50 条占满，把刷视频经历挤出可视范围（2026-11-25 修）。老面板没 days 字段时退回 recent 筛法
+  const days = mem?.days || keep.filter((e) => e.kind !== 'self');    // 日子：发生过的经历（B站、计划执行、别的零碎）
+  const list = [...gists, ...keep, ...days]; // 改 / 删按钮按 id 找条目用（days 全量经历也要能改删）
   const pend = mem?.insightPending || []; // 审核池（mind.insightReview 开着才有）：放行才进流
   const retired = mem?.retiredInsights || []; // 被推翻的洞察：折叠留着，错了还能翻回来
   S.memSub = S.memSub || 'days';
@@ -333,8 +346,7 @@ function renderMemories(box, mem) {
   // 日子按天分组：今天/昨天摊开，更早的按天折叠（条目本身已是新→旧）
   const groups = [];
   for (const e of days) {
-    const d = new Date(e.ts);
-    const k = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    const k = memDayKey(e.ts);
     if (!groups.length || groups.at(-1).k !== k) groups.push({ k, ts: e.ts, rows: [] });
     groups.at(-1).rows.push(e);
   }
@@ -343,35 +355,58 @@ function renderMemories(box, mem) {
     const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
     return same(d, t) ? '今天' : same(d, y) ? '昨天' : `${d.getMonth() + 1}月${d.getDate()}日`;
   };
-  const daysHtml = groups.length ? groups.map((g) => {
+  // 日期筛选：S.memDay 存 YYYY-MM-DD；有值就只显示那一天（含空态），不递归折叠；全部则按原逻辑摊开/折叠
+  S.memDay = S.memDay || '';
+  const shown = S.memDay ? groups.filter((g) => g.k === S.memDay) : groups;
+  const dayPicker = `<div class="mem-daypick"><label for="memDayPick">按日子看</label><input type="date" id="memDayPick" value="${esc(S.memDay)}" aria-label="选择日期查看当天记忆"><button class="btn sm ghost" id="memDayAll" ${S.memDay ? '' : 'disabled'}>全部日子</button><span class="mem-hint">${groups.length ? `共 ${groups.length} 天有经历` : '还没有经历可挑'}</span></div>`;
+  const daysHtml = dayPicker + (shown.length ? shown.map((g) => {
     const title = dayTitle(g.ts);
-    const rows = `<ul class="vip-list">${g.rows.map(memRow).join('')}</ul>`;
-    return title === '今天' || title === '昨天'
-      ? `<div class="small" style="margin:10px 0 4px"><span class="k sec-k">${title}</span> <span class="muted">${g.rows.length} 条</span></div>${rows}`
-      : `<details class="mem-fold"><summary class="small muted">${title} · ${g.rows.length} 条</summary>${rows}</details>`;
-  }).join('') : '<div class="empty">还没有她的经历，等她刷起来、计划跑起来就有了</div>';
+    const rows = memList(g.rows);
+    return S.memDay || title === '今天' || title === '昨天'
+      ? `<section class="mem-group">${memGroupHead(S.memDay ? `${title} · ${g.k}` : title, g.rows.length)}${rows}</section>`
+      : `<details class="mem-fold mem-group"><summary>${memGroupHead(title, g.rows.length)}</summary>${rows}</details>`;
+  }).join('') : `<div class="empty">${S.memDay ? `${esc(S.memDay)} 这天没有她的经历，换个日子看看` : '还没有她的经历，等她刷起来、计划跑起来就有了'}</div>`);
 
-  const ideasHtml = `${pend.length ? `<div class="mem-pending"><div class="small"><span class="k sec-k">💭 待审洞察</span> <span class="muted">审核池开着：你放行才进她的记忆流</span></div>
-    <ul class="vip-list" style="margin-top:8px">${pend.map((p, i) => `<li><div style="flex:1;min-width:0" class="small">💭 ${esc(p.text)}<div class="muted">${esc(p.at || '')}</div></div>
-      <button class="btn sm" data-insok="${i}">放行</button><button class="btn sm ghost" data-insno="${i}">丢掉</button></li>`).join('')}</ul></div>` : ''}
-    ${ideas.length ? `<div class="small" style="margin:10px 0 4px"><span class="k sec-k">洞察与想法</span> <span class="muted">她自己归纳的结论和内心活动——是猜想不是观测；recall 打分自带折扣，不会盖过真事</span></div>
-    <ul class="vip-list">${ideas.map(memRow).join('')}</ul>` : '<div class="empty">还没有想法，每晚反思之后会有</div>'}
-    ${retired.length ? `<details class="mem-fold"><summary class="small muted">被推翻的洞察 ${retired.length} 条（折叠留着，错了还能翻回来）</summary><ul class="vip-list">${retired.map((e) => `<li><div style="flex:1;min-width:0" class="small muted">💭 ${esc(e.text)}<div class="muted">${ago(e.ts)}</div></div></li>`).join('')}</ul></details>` : ''}`;
+  const ideasHtml = `${pend.length ? `<section class="mem-pending">${memGroupHead('💭 待审洞察', null, '审核池开着：你放行才进她的记忆流')}
+    ${memList(pend, (p, i) => `<li class="mem-entry">
+      <span class="mem-entry-ico">💭</span>
+      <div class="mem-entry-body"><div class="mem-entry-text">${esc(p.text)}</div><div class="mem-meta">${esc(p.at || '')}</div></div>
+      <span class="mem-entry-act"><button class="btn sm" data-insok="${i}">放行</button><button class="btn sm ghost" data-insno="${i}">丢掉</button></span></li>`)}</section>` : ''}
+    ${ideas.length ? `<section class="mem-group">${memGroupHead('洞察与想法', ideas.length, '她自己归纳的结论——是猜想不是观测；recall 打分自带折扣，不会盖过真事')}${memList(ideas)}</section>` : '<div class="empty">还没有想法，每晚反思之后会有</div>'}
+    ${retired.length ? `<details class="mem-fold mem-group"><summary>${memGroupHead('被推翻的洞察', retired.length, '折叠留着，错了还能翻回来')}</summary>${memList(retired, (e) => `<li class="mem-entry mem-entry-muted"><span class="mem-entry-ico">💭</span><div class="mem-entry-body"><div class="mem-entry-text">${esc(e.text)}</div><div class="mem-meta">${ago(e.ts)}</div></div></li>`)}</details>` : ''}`;
 
-  const zone = (t, d, rows) => rows.length ? `<div class="small" style="margin:10px 0 4px"><span class="k sec-k">${t}</span> <span class="muted">${d}</span></div>
-    <ul class="vip-list">${rows.map(memRow).join('')}</ul>` : '';
-  const gistHtml = `${zone('印象', '她自己把零碎事概括成的', impr)}
-    ${zone('对话日结', `号主 / 群 / 好友私聊每晚结的${chats.length > chatShow.length ? `，只列最近 ${chatShow.length} 条（共 ${chats.length} 条，更早的几天后会合成印象）` : '，几天后会合成印象'}`, chatShow)}
+  // 分批显示：先各画 20 条，点「再显示」往列表尾部追加，不整页重渲染（滚动位置不跳）。
+  // 追加的条目由下方 box.onclick 事件委托接管改/删按钮，不用重新绑定。
+  const MEM_PAGE = 20;
+  S.gistShown = S.gistShown || { impr: MEM_PAGE, chat: MEM_PAGE };
+  const page = {
+    impr: { rows: impr, shown: Math.min(S.gistShown.impr || MEM_PAGE, impr.length) },
+    chat: { rows: chats, shown: Math.min(S.gistShown.chat || MEM_PAGE, chats.length) },
+  };
+  const zone = (key, t, d) => {
+    const st = page[key];
+    if (!st.rows.length) return '';
+    const rest = st.rows.length - st.shown;
+    return `<section class="mem-group">${memGroupHead(t, st.rows.length, d)}${memList(st.rows.slice(0, st.shown))}
+      ${rest ? `<button class="btn sm ghost mem-more" data-memmore="${key}">再显示 ${Math.min(MEM_PAGE, rest)} 条（还有 ${rest} 条）</button>` : ''}</section>`;
+  };
+  const gistHtml = `${zone('impr', '印象', '她自己把零碎事概括成的')}
+    ${zone('chat', '对话日结', '号主 / 群 / 好友私聊每晚结的，几天后会合成印象')}
     ${!gists.length ? '<div class="empty">还没有印象，零碎记够几天会自己合成</div>' : ''}
-    <div class="row" style="margin-top:8px"><button class="btn sm ghost" id="memTidy">现在整理一下</button><span class="small muted">每晚睡前反思完会自己整理：零碎的合成印象，太久没想起的忘掉</span></div>`;
+    <div class="mem-foot"><button class="btn sm ghost" id="memTidy">现在整理一下</button><span class="mem-hint">每晚睡前反思完会自己整理：零碎的合成印象，太久没想起的忘掉</span></div>`;
 
-  const archHtml = `<div class="row" style="margin:8px 0"><span class="chip">在记 ${(mem.total || 0) - (mem.gistCount || 0)} 条</span><span class="chip">印象 ${mem.gistCount || 0} 条</span><span class="chip">淡忘档案 ${mem.archive?.rows || 0} 条</span>${mem.archive && !mem.archive.ready ? '<span class="chip">⚠️ 档案库没起来</span>' : ''}</div>
-    <p class="small muted" style="margin-top:0">忘掉的不会自己想起来，但原文一直留在档案里，搜得到。</p>
-    <div class="row"><input id="memArchQ" placeholder="翻淡忘档案：忘掉的原文还在，搜得回来" style="flex:1"><button class="btn sm" id="memArch">翻一翻</button></div><div id="memArchOut"></div>`;
+  const archHtml = `<div class="mem-stats"><span class="chip">在记 ${(mem.total || 0) - (mem.gistCount || 0)} 条</span><span class="chip">印象 ${mem.gistCount || 0} 条</span><span class="chip">淡忘档案 ${mem.archive?.rows || 0} 条</span>${mem.archive && !mem.archive.ready ? '<span class="chip amber">⚠️ 档案库没起来</span>' : ''}</div>
+    <p class="mem-hint mem-hint-block">忘掉的不会自己想起来，但原文一直留在档案里，搜得到。</p>
+    <div class="mem-search"><input id="memArchQ" placeholder="翻淡忘档案：忘掉的原文还在，搜得回来"><button class="btn sm" id="memArch">翻一翻</button></div><div id="memArchOut"></div>`;
 
-  box.innerHTML = `<div class="seg" id="memSubSeg"><button data-v="days" class="${S.memSub === 'days' ? 'on' : ''}">日子（${days.length}）</button><button data-v="ideas" class="${S.memSub === 'ideas' ? 'on' : ''}">想法（${ideas.length + retired.length}）</button><button data-v="gist" class="${S.memSub === 'gist' ? 'on' : ''}">印象·日结（${gists.length}）</button><button data-v="arch" class="${S.memSub === 'arch' ? 'on' : ''}">档案（${mem.archive?.rows || 0}）</button></div>
-    <div>${S.memSub === 'days' ? daysHtml : S.memSub === 'ideas' ? ideasHtml : S.memSub === 'gist' ? gistHtml : archHtml}</div>`;
+  box.innerHTML = `<div class="seg mem-subseg" id="memSubSeg"><button data-v="days" class="${S.memSub === 'days' ? 'on' : ''}">日子（${days.length}）</button><button data-v="ideas" class="${S.memSub === 'ideas' ? 'on' : ''}">想法（${ideas.length + retired.length}）</button><button data-v="gist" class="${S.memSub === 'gist' ? 'on' : ''}">印象·日结（${gists.length}）</button><button data-v="arch" class="${S.memSub === 'arch' ? 'on' : ''}">档案（${mem.archive?.rows || 0}）</button></div>
+    <div class="mem-pane">${S.memSub === 'days' ? daysHtml : S.memSub === 'ideas' ? ideasHtml : S.memSub === 'gist' ? gistHtml : archHtml}</div>`;
   $$('#memSubSeg button', box).forEach((b) => (b.onclick = () => { S.memSub = b.dataset.v; renderMemories(box, mem); }));
+  const dayPick = $('#memDayPick', box); // 只在「日子」子标签里
+  if (dayPick) {
+    dayPick.onchange = () => { S.memDay = dayPick.value; renderMemories(box, mem); };
+    $('#memDayAll', box).onclick = () => { S.memDay = ''; renderMemories(box, mem); };
+  }
   const tidyBtn = $('#memTidy', box); // 只在「印象·日结」子标签里
   if (tidyBtn) tidyBtn.onclick = (ev) => busy(ev.target, async () => {
     const r = await api('/api/memory/tidy', {});
@@ -386,32 +421,49 @@ function renderMemories(box, mem) {
     const r = await api('/api/memdb/search', { q }).catch(() => ({ hits: [] }));
     const hits = r.hits || [];
     out.innerHTML = hits.length
-      ? `<div class="small" style="margin-top:6px"><span class="k sec-k">淡忘档案</span> 搜到 ${hits.length} 条 <span class="muted">（想不太清了的原文，不会自己想起来，但你翻得到）</span></div>
-      <ul class="vip-list">${hits.slice(0, 20).map((e) => `<li><div style="flex:1;min-width:0" class="small">${MEM_KIND[e.kind] || '•'} ${esc(e.text)}<div class="muted">${e.kind === 'fact' ? `记于 ${esc(e.ts || '')}` : `${ago(e.ts)} · 重要 ${e.imp}/5${e.seen ? ' · 忘掉前想起过' : ''}`}</div></div></li>`).join('')}</ul>`
-      : '<div class="empty" style="margin-top:6px">档案里也没有</div>';
+      ? `<section class="mem-group mem-search-out">${memGroupHead('淡忘档案', hits.length, '想不太清了的原文，不会自己想起来，但你翻得到')}${memList(hits.slice(0, 20), (e) => `<li class="mem-entry mem-entry-muted"><span class="mem-entry-ico">${MEM_KIND[e.kind] || '•'}</span><div class="mem-entry-body"><div class="mem-entry-text">${esc(e.text)}</div><div class="mem-meta">${e.kind === 'fact' ? `记于 ${esc(e.ts || '')}` : `${ago(e.ts)}<span class="mem-dot">·</span>重要 ${e.imp}/5${e.seen ? '<span class="mem-dot">·</span>忘掉前想起过' : ''}`}</div></div></li>`)}</section>`
+      : '<div class="empty">档案里也没有</div>';
   });
   const archBtn = $('#memArch', box); // 只在「档案」子标签里
   if (archBtn) {
     archBtn.onclick = arch;
     $('#memArchQ', box).onkeydown = (ev) => { if (ev.key === 'Enter') arch(); };
   }
-  $$('[data-memedit]', box).forEach((b) => (b.onclick = () => {
-    const e = list.find((x) => x.id === b.dataset.memedit);
-    const text = prompt('改成什么？', e.text);
-    if (text === null) return;
-    const imp = prompt('重要程度 1~5（越重要记得越久）', String(e.imp));
-    if (imp === null) return;
-    busy(b, async () => { renderMemories(box, await api('/api/memory/update', { id: e.id, text, imp: Number(imp) })); toast('改好了'); });
-  }));
-  $$('[data-memdel]', box).forEach((b) => (b.onclick = () => busy(b, async () => {
-    renderMemories(box, await api('/api/memory/delete', { id: b.dataset.memdel }));
-  })));
-  $$('[data-insok]', box).forEach((b) => (b.onclick = () => busy(b, async () => {
-    renderMemories(box, await api('/api/memory/insight/approve', { i: Number(b.dataset.insok) })); toast('放行了，进她的记忆流');
-  })));
-  $$('[data-insno]', box).forEach((b) => (b.onclick = () => busy(b, async () => {
-    renderMemories(box, await api('/api/memory/insight/reject', { i: Number(b.dataset.insno) }));
-  })));
+  // 统一事件委托：「显示更多」追加进来的条目也带完整改/删能力，不用重新绑定。
+  // 用 = 赋值而非 addEventListener，重渲染时覆盖旧的，不会累积监听器。
+  box.onclick = (ev) => {
+    const hit = (sel) => ev.target.closest(sel);
+    const ed = hit('[data-memedit]');
+    if (ed) {
+      const e = list.find((x) => x.id === ed.dataset.memedit);
+      if (!e) return;
+      const text = prompt('改成什么？', e.text);
+      if (text === null) return;
+      const imp = prompt('重要程度 1~5（越重要记得越久）', String(e.imp));
+      if (imp === null) return;
+      busy(ed, async () => { renderMemories(box, await api('/api/memory/update', { id: e.id, text, imp: Number(imp) })); toast('改好了'); });
+      return;
+    }
+    const dl = hit('[data-memdel]');
+    if (dl) { busy(dl, async () => { renderMemories(box, await api('/api/memory/delete', { id: dl.dataset.memdel })); }); return; }
+    const ok = hit('[data-insok]');
+    if (ok) { busy(ok, async () => { renderMemories(box, await api('/api/memory/insight/approve', { i: Number(ok.dataset.insok) })); toast('放行了，进她的记忆流'); }); return; }
+    const no = hit('[data-insno]');
+    if (no) { busy(no, async () => { renderMemories(box, await api('/api/memory/insight/reject', { i: Number(no.dataset.insno) })); }); return; }
+    const more = hit('[data-memmore]');
+    if (more) {
+      const st = page[more.dataset.memmore];
+      if (!st) return;
+      const next = st.rows.slice(st.shown, st.shown + MEM_PAGE);
+      if (!next.length) return;
+      more.parentElement.querySelector('.mem-list').insertAdjacentHTML('beforeend', next.map(memRow).join(''));
+      st.shown += next.length;
+      S.gistShown[more.dataset.memmore] = st.shown;
+      const rest = st.rows.length - st.shown;
+      if (rest) more.textContent = `再显示 ${Math.min(MEM_PAGE, rest)} 条（还有 ${rest} 条）`;
+      else more.remove();
+    }
+  };
 }
 
 // ─── 记忆页：她自己的（日子/想法/印象/档案四个子标签）+ 关于号主的事 + 朋友们 ──
@@ -424,19 +476,21 @@ async function pageMemory(main) {
   const friends = fr.list || [];
   S.memTab = S.memTab || 'mine';
   main.innerHTML = head('记忆', intro) +
-    `<div class="seg" id="memSeg"><button data-v="mine" class="${S.memTab === 'mine' ? 'on' : ''}">她自己的（${mem.total || 0}）</button><button data-v="owner" class="${S.memTab === 'owner' ? 'on' : ''}">关于你的事（${facts.length}）</button><button data-v="friends" class="${S.memTab === 'friends' ? 'on' : ''}">朋友们（${friends.length}）</button></div>
-     <div class="card memCard" id="memCard"></div>`;
+    `<div class="seg mem-topseg" id="memSeg"><button data-v="mine" class="${S.memTab === 'mine' ? 'on' : ''}">她自己的（${mem.total || 0}）</button><button data-v="owner" class="${S.memTab === 'owner' ? 'on' : ''}">关于你的事（${facts.length}）</button><button data-v="friends" class="${S.memTab === 'friends' ? 'on' : ''}">朋友们（${friends.length}）</button></div>
+     <section class="card memCard" id="memCard"></section>`;
   const FACT_SRC = { nightly: '每晚整理记的', chat: '聊天时记的', dsh: '从 DSH 带来的' };
   const renderTab = () => {
     const card = $('#memCard', main);
     if (S.memTab === 'owner') {
-      card.innerHTML = `<div class="card-h"><h2>她记得的关于你的事</h2><span class="small muted">聊天时和每晚整理记的；删了她就忘了</span></div>
-        ${facts.length ? `<ul class="vip-list">${facts.slice().reverse().map((f) => `<li><div style="flex:1;min-width:0" class="small"><span class="chip">${esc(f.kind)}</span> ${esc(f.text)}<div class="muted">${esc(f.at)} · ${FACT_SRC[f.source] || f.source || ''}</div></div>
-          <button class="btn sm ghost" data-fact="${esc(f.id)}" title="让她忘掉这条">×</button></li>`).join('')}</ul>` : '<div class="empty">还没记什么，聊着聊着就有了</div>'}`;
+      card.innerHTML = `<div class="mem-card-h"><h2>她记得的关于你的事</h2><span class="mem-hint">聊天时和每晚整理记的；删了她就忘了</span></div>
+        ${facts.length ? `<ul class="mem-list">${facts.slice().reverse().map((f) => `<li class="mem-entry">
+          <span class="mem-entry-ico">👤</span>
+          <div class="mem-entry-body"><div class="mem-entry-text"><span class="chip mini mem-kind">${esc(f.kind)}</span>${esc(f.text)}</div><div class="mem-meta">${esc(f.at)}<span class="mem-dot">·</span>${esc(FACT_SRC[f.source] || f.source || '')}</div></div>
+          <span class="mem-entry-act"><button class="btn sm ghost" data-fact="${esc(f.id)}" title="让她忘掉这条">×</button></span></li>`).join('')}</ul>` : '<div class="empty">还没记什么，聊着聊着就有了</div>'}`;
       $$('[data-fact]', card).forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/qq/fact/delete', { id: b.dataset.fact }); pageMemory(main); })));
     } else if (S.memTab === 'friends') {
       const soc = fr.social;
-      card.innerHTML = `<div class="card-h"><h2>她的朋友们</h2><span class="small muted">群里和私聊里认识的人，一人一份小档案；互不串场，也不进她跟号主的印象</span></div>
+      card.innerHTML = `<div class="mem-card-h"><h2>她的朋友们</h2><span class="mem-hint">群里和私聊里认识的人，一人一份小档案；互不串场，也不进她跟号主的印象</span></div>
         ${soc?.text ? `<p class="small friend-social">💬 朋友圈近况（${esc(soc.date || '')}）：${esc(soc.text)}</p>` : ''}
         ${friends.length ? `<ul class="vip-list friend-list">${friends.map((f) => {
           const groups = f.groups || [];
@@ -460,7 +514,7 @@ async function pageMemory(main) {
       }));
       $$('.friend-del', card).forEach((b) => (b.onclick = () => deleteFriendFlow(b.dataset.qq, () => pageMemory(main))));
     } else {
-      card.innerHTML = `<div class="card-h"><h2>她自己的</h2><span class="small muted">日子 = 经历 · 想法 = 洞察与内心 · 印象·日结 = 压缩层 · 档案 = 淡忘的原文</span></div>
+      card.innerHTML = `<div class="mem-card-h"><h2>她自己的</h2><span class="mem-hint">日子 = 经历 · 想法 = 洞察与内心 · 印象·日结 = 压缩层 · 档案 = 淡忘的原文</span></div>
         <div id="memPageList"></div>`;
       renderMemories($('#memPageList', card), mem);
     }
@@ -692,7 +746,7 @@ async function pageActivity(main) {
   load();
 }
 
-// ─── 插嘴裁决：群消息打分闸的专属账本 ──────────────────────
+// ─── 群聊感知：插嘴裁决 / 群背景 / 大事件 三合一账本 ───────────
 const GATE_VERDICT = { '过闸': 'green', '仲裁放行': 'blue', '仲裁拦下': 'amber', '拦下': '', '没接': '', '限流': 'violet' };
 function gateRow(a) {
   const m = a.meta || {};
@@ -709,38 +763,83 @@ function gateRow(a) {
       <div class="m"><span class="chip ${color}">${verdict}</span>${score !== '' ? `<span class="num">${score} 分</span>` : ''}<span class="muted">${esc(reasons)}</span>${peer ? `<span class="chip">${esc(peer)}</span>` : ''}</div></div>
   </li>`;
 }
+// 群背景 / 大事件的行：meta 优先，旧记录从 detail 文本兜底解析
+function senseRow(a, kind) {
+  const m = a.meta || {};
+  const detail = a.detail || '';
+  const imp = m.imp ?? (/([\d.]+) 分|imp\s*(\d+)/.exec(detail)?.[1] ?? '');
+  const why = m.why || /·([^）]+)）/.exec(detail)?.[1] || '';
+  const peer = m.peer ? (String(m.peer).startsWith('g:') ? `群 ${String(m.peer).slice(2)}` : '私聊') : '';
+  const name = m.name || '';
+  const text = m.text || detail;
+  if (kind === 'big_event') {
+    return `<li>
+      <div class="time num">${hm(a.ts)}</div>
+      <div class="ico">⚡</div>
+      <div class="body"><div class="x">${esc(text)}</div>
+        <div class="m"><span class="chip amber">大事件</span>${name ? `<span class="muted">${esc(name)}</span>` : ''}${peer ? `<span class="chip">${esc(peer)}</span>` : ''}</div></div>
+    </li>`;
+  }
+  return `<li>
+    <div class="time num">${hm(a.ts)}</div>
+    <div class="ico">👂</div>
+    <div class="body"><div class="x">${esc(text)}</div>
+      <div class="m"><span class="chip blue">imp ${esc(String(imp))}</span>${why ? `<span class="muted">${esc(why)}</span>` : ''}${name ? `<span class="muted">${esc(name)}</span>` : ''}${peer ? `<span class="chip">${esc(peer)}</span>` : ''}</div></div>
+  </li>`;
+}
+
 async function pageGate(main) {
-  const F = (S.gateF ||= { verdict: '', date: '', q: '' });
-  main.innerHTML = head('插嘴裁决', '群里每句没 @ 她的话都过一遍打分闸：几分、命中了什么、拦没拦——调手感全靠这份账') +
+  const F = (S.gateF ||= { tab: 'gate', verdict: '', date: '', q: '' });
+  const TABS = [['gate', '🎯 插嘴裁决'], ['perceive', '👂 群背景'], ['big_event', '⚡ 大事件']];
+  const HINT = {
+    gate: '群里每句没 @ 她的话都过一遍打分闸：几分、命中了什么、拦没拦——调手感全靠这份账',
+    perceive: '没 @ 她、她也没回的群聊，低重要度实时记进记忆流（imp 1~2，几天后自然淡掉）——从活动记录挪到这儿，免得刷屏',
+    big_event: '住院、出事、崩溃这类外来大事（imp≥4）：记得更牢，还会即时唤起她想一句、重排当天计划。活动记录里也留一份',
+  };
+  main.innerHTML = head('群聊感知', HINT[F.tab]) +
     `<div class="card">
       <div class="filters">
-        <div class="seg" id="vSeg">${[['', '全部'], ...Object.keys(GATE_VERDICT).map((k) => [k, k])].map(([k, n]) => `<button data-v="${k}" class="${F.verdict === k ? 'on' : ''}">${n}</button>`).join('')}</div>
-        <input type="date" id="gDate" value="${esc(F.date)}" style="width:auto">
-        <input id="gQ" placeholder="搜消息 / 命中项" value="${esc(F.q)}" style="width:200px">
-        <span class="spacer"></span><span class="small muted" id="gStat"></span>
+        <div class="seg" id="tabSeg">${TABS.map(([k, n]) => `<button data-t="${k}" class="${F.tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
       </div>
+      <div class="filters" id="subFilters"></div>
       <div id="gateList"><div class="empty">加载中…</div></div>
     </div>`;
+  const sub = $('#subFilters');
+  if (F.tab === 'gate') {
+    sub.innerHTML = `<div class="seg" id="vSeg">${[['', '全部'], ...Object.keys(GATE_VERDICT).map((k) => [k, k])].map(([k, n]) => `<button data-v="${k}" class="${F.verdict === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <input type="date" id="gDate" value="${esc(F.date)}" style="width:auto">
+      <input id="gQ" placeholder="搜消息 / 命中项" value="${esc(F.q)}" style="width:200px">
+      <span class="spacer"></span><span class="small muted" id="gStat"></span>`;
+  } else {
+    sub.innerHTML = `<input type="date" id="gDate" value="${esc(F.date)}" style="width:auto">
+      <input id="gQ" placeholder="${F.tab === 'perceive' ? '搜群背景内容' : '搜大事件内容'}" value="${esc(F.q)}" style="width:200px">
+      <span class="spacer"></span><span class="small muted" id="gStat"></span>`;
+  }
   const load = async () => {
-    const qs = new URLSearchParams({ kind: 'gate', limit: 400, ...Object.fromEntries(Object.entries(F).filter(([, v]) => v)) });
+    const qs = new URLSearchParams({ kind: F.tab, limit: 400, ...(F.date ? { date: F.date } : {}), ...(F.q ? { q: F.q } : {}) });
     try {
       const r = await api('/api/actions?' + qs);
       let list = r.list;
-      if (F.verdict) list = list.filter((a) => (a.meta?.verdict || /插嘴(过闸|仲裁放行|仲裁拦下|拦下|限流)/.exec(a.detail || '')?.[1] || '') === F.verdict);
-      const cnt = {};
-      for (const a of list) { const v = a.meta?.verdict || '旧记录'; cnt[v] = (cnt[v] || 0) + 1; }
-      $('#gStat').textContent = `共 ${r.total} 条` + (Object.keys(cnt).length > 1 ? ` · ${Object.entries(cnt).map(([k, n]) => `${k} ${n}`).join(' / ')}` : '');
+      if (F.tab === 'gate' && F.verdict) list = list.filter((a) => (a.meta?.verdict || /插嘴(过闸|仲裁放行|仲裁拦下|拦下|限流)/.exec(a.detail || '')?.[1] || '') === F.verdict);
+      if (F.tab === 'gate') {
+        const cnt = {};
+        for (const a of list) { const v = a.meta?.verdict || '旧记录'; cnt[v] = (cnt[v] || 0) + 1; }
+        $('#gStat').textContent = `共 ${r.total} 条` + (Object.keys(cnt).length > 1 ? ` · ${Object.entries(cnt).map(([k, n]) => `${k} ${n}`).join(' / ')}` : '');
+      } else {
+        $('#gStat').textContent = `共 ${r.total} 条`;
+      }
       if (!list.length) { $('#gateList').innerHTML = '<div class="empty"><span class="fish">🫧</span>这里还空空的</div>'; return; }
       let html = '', cur = '';
       for (const a of list) {
         const d = localDate(new Date(a.ts));
         if (d !== cur) { if (cur) html += '</ul>'; html += `<div class="tl-day">${dayLabel(d)} · ${d}</div><ul class="tl">`; cur = d; }
-        html += gateRow(a);
+        html += F.tab === 'gate' ? gateRow(a) : senseRow(a, F.tab);
       }
       $('#gateList').innerHTML = html + '</ul>';
     } catch (e) { $('#gateList').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   };
-  $$('#vSeg button').forEach((b) => (b.onclick = () => { F.verdict = b.dataset.v; $$('#vSeg button').forEach((x) => x.classList.toggle('on', x === b)); load(); }));
+  $$('#tabSeg button').forEach((b) => (b.onclick = () => { F.tab = b.dataset.t; route(); }));
+  if (F.tab === 'gate') $$('#vSeg button').forEach((b) => (b.onclick = () => { F.verdict = b.dataset.v; $$('#vSeg button').forEach((x) => x.classList.toggle('on', x === b)); load(); }));
   $('#gDate').onchange = (e) => { F.date = e.target.value; load(); };
   let qt; $('#gQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { F.q = e.target.value.trim(); load(); }, 300); };
   load();

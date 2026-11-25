@@ -130,6 +130,17 @@ import { ensurePlan, markExpired, morningPlan, recordSlotFeedback, diaryPublishe
 // 拆分（2026-11-13）后的外部消费面不变：panel 和测试还从 autopilot 拿这些，转出口兜住
 export { todayPlan, replanToday, morningPlan, recordSlotFeedback } from './plan.mjs';
 
+// ─── 序10 事件钩子：imp≥4 的外来大事入流 → 即时轻反思 + 重排今日计划 ────────
+// 注入到 memory.add（放那边会跟 mind/plan 循环依赖）。只认 memory.add({..., hook:true, imp>=4})。
+// 重排自带每天 2 次闸；轻反思自带每天 2 次闸。养号关着（mindOn false）时整条跳过。
+memory.setImportantHook(async (entry) => {
+  if (!mind.mindOn()) return;
+  try { await mind.reflectOnEvent(entry); } catch (e) { console.error('[autopilot] 事件轻反思没跑成：', e.message); }
+  // 正刷视频时不重排（跑一半的会话不该被外部事件插队），等下一班 tick；重排闸也在 morningPlan 里兜着
+  if (live.running) return;
+  try { await morningPlan({ replan: true }); } catch (e) { console.error('[autopilot] 事件触发的重排没跑成：', e.message); }
+});
+
 
 /** 按晨间计划执行一个时辰：rest 歇着、diary/check 走专项、其余交给 runSession */
 export async function executeSlot(slot) {

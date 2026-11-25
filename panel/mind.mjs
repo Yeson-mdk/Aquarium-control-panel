@@ -613,6 +613,46 @@ ${view.recent.slice(0, 12).map((e) => `- ${memory.ago(e.ts, now)}：${fence(e.te
 }
 
 /**
+ * 序10 事件钩子·轻反思：一条 imp≥4 的外来大事入流后，即时对这件事想一句，记进记忆并挪一下关注点。
+ * 跟日间复盘（reflectSelf）的区别：那是按时辰格跑、读一段记忆归纳；这是被事件即时唤起、只盯着这一件。
+ * 每天最多 2 次（跟重排闸对齐）——大事连着来也别把后台预算烧光。非 essential，预算用完静默跳过。
+ * 返回 { ok, summary }，失败不抛（钩子不能影响记忆落库）。
+ */
+const eventReflectCount = new Map(); // 日期 → 次数，重启清零没关系（跟其它后台记账一致）
+export async function reflectOnEvent(entry, now = Date.now()) {
+  const day = localDate(new Date(now));
+  const used = eventReflectCount.get(day) || 0;
+  if (used >= 2) return { ok: true, summary: '今天为大事件想过两次了' };
+  const m = readMind();
+  try {
+    const j = await ask(
+      '一件刚发生的事，想想它。只输出 JSON。',
+      `她最近的样子：${(m.self || '').slice(0, 160) || '（还没写过）'}
+${await skyLine()}
+刚发生的一件事（别人说的，未必跟她有关）：${String(entry?.text || '').slice(0, 160)}
+
+只用这一件事，别编别的。第一人称想一句：这事让她在意什么、心情挪了一点没有。
+不许写成回复、不许喊谁、不许编她没做过的事。80 字内。
+输出：{"thought":"一句想法","mood":"一个词的心情（没变化就空串）"}`,
+      500,
+    );
+    const thought = str(j.thought, 100);
+    if (thought) {
+      memory.add({ kind: 'self', imp: 3, text: `因一件事想：${thought}` });
+      logAction({ kind: 'reflect_event', source: 'auto', detail: `⚡ 大事件轻反思：${thought.slice(0, 60)}` });
+    }
+    const mood = str(j.mood, 16);
+    if (mood) writeMind({ ...readMind(), ...setMood(readMind(), mood) });
+    eventReflectCount.set(day, used + 1);
+    return { ok: true, summary: thought || '想了想，没想出什么' };
+  } catch (e) {
+    // 失败不算名额（下一件大事还能试）；预算用完这类也静默跳过
+    console.error('[mind] 大事件轻反思没跑成：', e.message);
+    return { ok: false, summary: e.message };
+  }
+}
+
+/**
  * B2 发呆放空：一小段自我遐想写 kind:self。人设质感（她会自然提起今天发呆想了什么）。
  * 每天最多 1 格。提示词只给事实规则，不放「水塘/泡泡」类 goal 例句（例句会被复读，见软提示原则）。
  */

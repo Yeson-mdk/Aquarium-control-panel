@@ -120,6 +120,13 @@ function embedAside(id, text) {
   }).catch(() => { /* 向量是锦上添花，失败不惊动记忆主路径 */ });
 }
 
+// 序10 事件钩子：imp≥4 的外来大事一入流，就即时轻反思 + 重排今日计划。
+// 回调由 autopilot.mjs 注入（它同时握着 mind 和 plan，放这儿会循环依赖）。
+// 只认显式传了 hook:true 的条目——mind 自己的 imp4/5 产出（睡前反思、洞察）
+// 和测试里的 imp4 样本都不带这个旗，不会被误触发成「外部事件」。
+let importantHook = null;
+export function setImportantHook(fn) { importantHook = typeof fn === 'function' ? fn : null; }
+
 /** 记一条。keys 用「up:UP主名」「uid:123」「bv:BV...」这种前缀，方便精确命中 */
 export function add(x) {
   if (!x?.text || looksInjected(x.text)) return null;
@@ -130,6 +137,11 @@ export function add(x) {
     save(all);
   });
   embedAside(e.id, e.text); // 落库后再打向量，add 的同步签名和返回值都不变
+  // 火-and-forget：钩子失败不能影响记忆落库；只在外来大事（hook:true 且 imp≥4）时触发
+  if (x.hook === true && e.imp >= 4 && importantHook) {
+    try { Promise.resolve(importantHook(e)).catch((err) => console.error('[memory] 事件钩子没跑成：', err?.message || err)); }
+    catch (err) { console.error('[memory] 事件钩子没跑成：', err?.message || err); }
+  }
   return e;
 }
 
@@ -276,12 +288,21 @@ export function memoryView(n = 30) {
   const all = load();
   const live = all.filter((e) => !e.dead); // dead = 被推翻的洞察，不进给模型看的任何一路
   const isGist = (e) => e.kind === 'gist' || e.kind === 'chat';
+  // 「日子」= 她亲身经历（刷视频 watch、一轮刷 session、计划执行等）。
+  // 单独从全量里取，不从 recent 里筛——否则高频的群背景/大事件/日结把 recent 窗口占满，
+  // 经历就被挤得只剩一两条（2026-11-25 序9 落地后的真实故障）。
+  const EXPERIENCE = new Set(['watch', 'session', 'plan', 'task', 'diary']);
   memdb.init(); // 拿档案规模要连一下库（起来之后是空操作）
   return {
     total: live.length,
     gistCount: live.filter(isGist).length,
     recent: live.slice(-n).reverse(),
+    // 面板「记忆 → 日子」专用：全量经历，倒序；前端的按天分组只管展示
+    days: live.filter((e) => EXPERIENCE.has(e.kind)).reverse(),
     gists: live.filter(isGist).slice(-n).reverse(),
+    // 面板「印象·日结」专用：全量。gists 的 n 条窗口是 mind.mjs 人设更新 / recall-check.mjs 自检在用的，
+    // 不能改语义；面板要看到更早的印象就得单开一路（2026-11-25：日结高频把 50 条窗口占满，印象全被挤出去）。
+    gistsAll: live.filter(isGist).reverse(),
     // 2.6 洞察栏：她自己归纳的结论（kind self）；被 retire 的单列（面板灰显/折叠用，别真藏死——错了还能翻回来）
     insights: live.filter((e) => e.kind === 'self').slice(-n).reverse(),
     retiredInsights: all.filter((e) => e.kind === 'self' && e.dead).slice(-n).reverse(),

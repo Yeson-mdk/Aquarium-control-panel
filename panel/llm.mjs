@@ -135,6 +135,10 @@ export async function chatRaw(messages, { maxTokens = 300, temperature = 0.9, ta
   }
   const body = { model: String(model || cfg.model || '').trim(), messages, max_tokens: maxTokens, temperature };
   if (tools?.length) body.tools = tools;
+  // 采样惩罚（压套话复读）：config.json 的 llm 段写了 frequencyPenalty / presencePenalty（>0）才带上。
+  // 默认不带——不少 OpenAI 兼容网关不认这两个参数会直接 400，先 curl 验证过网关吃这套再往配置里写
+  if (Number(cfg.frequencyPenalty) > 0) body.frequency_penalty = Number(cfg.frequencyPenalty);
+  if (Number(cfg.presencePenalty) > 0) body.presence_penalty = Number(cfg.presencePenalty);
   // 高峰期限流（429/5xx/too busy）和网络抖动，隔 3 秒重试一次——这种错再问一遍大概率就过；
   // 401/404/余额这类重试也没用的，第一下就抛，别白等
   for (let attempt = 0; ; attempt++) {

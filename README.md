@@ -29,6 +29,8 @@
 - 每晚写日记、反思自己、整理记忆、从聊天里识别明天要赴的约
 
 **🧠 有记忆、会遗忘**
+- 群里没 @ 她的事也会实时低权重记下来（只记有信息的，纯刷屏跳过），不再只靠隔夜日结
+- 听到住院 / 出事 / 崩溃这类大事，当场想一句、顺手把今天的安排重排一下（每天各最多两次，不烧疯）
 - 群聊 / 私聊日结进记忆流，每晚长洞察、合成印象
 - A 群聊的事只在 A 群想得起来，私事不外漏（每条记忆带对话钥匙）
 - 可选语义召回：配个 embedding 模型，「换个说法也想得起来」；不配就纯关键词，不影响聊天
@@ -52,7 +54,7 @@ cd panel ; node panel.mjs        # 浏览器开 http://127.0.0.1:8899
 # 再跑 NapCat（panel/qq/napcat 里 docker compose up -d），面板填 ws://127.0.0.1:3001
 ```
 
-**面板里要配的**：模型设置（OpenAI 兼容接口；联网查资料要填 DeepSeek 官方地址，可选备用聊天模型主模型出错时自动降档）、QQ 连接（ModelScope 令牌，看图/做表情用；联网查资料的开关和外挂也在这）、B 站登录（用**她的号**扫码）、自动养号（选时辰、开总开关）。向量模型选填，配完点「测试向量模型」，再跑一次 `node panel/backfill-vec.mjs` 给旧记忆补向量。
+**面板里要配的**：模型设置（OpenAI 兼容接口；联网查资料要填 DeepSeek 官方地址，可选备用聊天模型主模型出错时自动降档）、QQ 连接（ModelScope 令牌，看图/做表情用；联网查资料的开关和外挂也在这）、B 站登录（用**她的号**扫码）、自动养号（选时辰、开总开关）。向量模型选填，配完点「测试向量模型」，再跑一次 `node ops/backfill-vec.mjs` 给旧记忆补向量。
 
 > 联网查资料走 DeepSeek 官方接口的服务端联网工具（`deepseek-flash` + `deepseek_web_search`），搜网页/读原文不额外收费、只算模型 token；不需要桌面版 DSH，NAS 单容器就能用。开关关掉后她连这个工具都看不到，一次都不会调。
 
@@ -73,12 +75,10 @@ cd panel ; node panel.mjs        # 浏览器开 http://127.0.0.1:8899
 │   ├── alert.mjs           失败告警通道（同 key 6 小时去抖，QQ 通知号主）
 │   ├── guard.mjs           进程兜底（未捕获异常不裸退，告警建议重启）
 │   ├── health.mjs + health-deps.mjs  接入体检 + 外部依赖每日探活
-│   ├── gate-labels.mjs     话题闸标注集（改权重前后跑翻案数）
 │   ├── purge.mjs           删除某人全部数据（面板朋友们页入口，二次确认）
 │   ├── lingo.mjs / social.mjs   B 站学说法 / 评论区社交
 │   ├── friends.mjs / fav.mjs    朋友档案 / 好感度
 │   ├── memeimg.mjs         梗图指纹库（手写解码器 + dHash）
-│   ├── backfill-vec.mjs / probe-semantic.mjs  向量回填 / 换说法探针
 │   ├── qq/                 QQ 子系统
 │   │   ├── index.mjs         收发 / 攒批 / 限流记账 / 看图接线
 │   │   ├── brain.mjs         聊天大脑（persona + 话题闸 + 回复管线）
@@ -91,6 +91,14 @@ cd panel ; node panel.mjs        # 浏览器开 http://127.0.0.1:8899
 │   │   └── tools.mjs         工具箱（表情包 / 歌曲 / 语音 / 记忆 / 派活 / 定时）
 │   ├── public/             面板前端（原生 JS 单文件，无构建）
 │   └── test/               回归测试（node:test，不碰真实数据）
+├── ops/                    ★ 手工 / 一次性工具（面板进程不加载，需要时手动 node 跑）
+│   ├── backfill-vec.mjs        存量记忆向量回填（换 embedding 模型后重打）
+│   ├── probe-ms-models.mjs     实测哪些 embedding 模型能用
+│   ├── probe-semantic.mjs      「换说法」召回验收探针（≥7/10 达标）
+│   ├── gate-labels.mjs         话题闸标注集（改权重前后跑翻案数）
+│   ├── fugao-stats.mjs         鱼八股账本（扫日志统计各类腔调高发情况）
+│   ├── prompt-dump.mjs         抓一次真实回复的完整提示词落成报告
+│   └── migrate-chat-kind.mjs   老 chat 数据归位迁移（默认预演，--apply 才写）
 ├── docs/                  代码导览.md（架构地图）、记忆升级计划.md、未来架构升级方案.md 等
 ├── stickers/              她的表情包 + notes.json（场合备注）
 ├── bilibili-mcp/          vendored bilibili-mcp-server + 补丁
@@ -200,6 +208,17 @@ B 站每日经验有上限（登录 5 + 观看 5 + 分享 5，投币另算），
 ```bash
 cd panel
 node --test test/*.test.mjs        # 不碰真实数据、不联网（假接口 + 临时目录）
+```
+
+**手工工具**（都在 `ops/`，面板进程不加载，按需 `node` 跑；命令从项目根目录执行）：
+
+```bash
+node ops/backfill-vec.mjs          # 换了 embedding 模型后给旧记忆补向量
+node ops/probe-ms-models.mjs       # 实测当前接口哪些 embedding 模型能用
+node ops/probe-semantic.mjs        # 「换说法」召回验收（≥7/10 达标）
+node ops/gate-labels.mjs score     # 改权重前后跑插嘴闸翻案数
+node ops/fugao-stats.mjs           # 扫日志统计鱼八股各类腔调
+node ops/migrate-chat-kind.mjs     # 老 chat 数据归位，默认预演，确认后加 --apply
 ```
 
 - 开发约定见 `docs/代码导览.md` 的**分层铁律**

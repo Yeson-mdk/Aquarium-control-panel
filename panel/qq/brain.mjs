@@ -18,6 +18,7 @@ import * as mind from '../mind.mjs';
 import * as lingo from '../lingo.mjs'; // B站学会的说法：注入聊天，让她在 QQ 里也用得上
 import * as sky from '../sky.mjs';
 import * as owner from './owner.mjs';
+import { baguScore, baguRewrite } from './bagu.mjs'; // 鱼八股特征表：历史降权 + 出口重roll 共用
 import * as meme from './meme.mjs'; // 号主教过的黑话：注入聊天，让她平常接得住梗
 import * as fav from '../fav.mjs';
 import * as friends from '../friends.mjs';
@@ -394,6 +395,13 @@ function history(list) {
     const gap = prev && t - prev > 3 * 3600_000 ? `（隔了 ${Math.round((t - prev) / 3600_000)} 小时）` : '';
     prev = t;
     const tag = { sticker: '[发了表情包] ', voice: '[发了语音] ', proactive: '[你主动找他] ', report: '[后台汇报] ', notice: '[提醒] ' }[e.kind] || '';
+    // 历史自污染治理：她过去偶尔的八股回复（命中 ≥2 类鱼八股特征）会原样当 assistant 范文反复出现，
+    // 模型接着模仿它，八股就自我延续了。降权成「大意」——聊了什么还看得到，逐字句式学不成了；
+    // 「（大意是：…）」和「（隔了 N 小时）」同属记录格式，不会被当话说出去
+    if (e.from === 'her' && !tag && baguScore(e.text) >= 2) {
+      out.push({ role: 'assistant', content: `${gap}${baguRewrite(e.text)}` });
+      continue;
+    }
     out.push({ role: e.from === 'owner' ? 'user' : 'assistant', content: `${gap}${tag}${e.name ? `[${e.name}] ` : ''}${e.text}` });
   }
   return out;
@@ -637,6 +645,23 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
       try { fav.applyDelta(qq || readConfig().qq.ownerQQ, d, why.slice(0, 40), { nickname: name }); } catch (e) { console.error('[fav] 记分', e.message); }
     }
   }
+  // 八股重roll：正文命中 ≥2 类鱼八股特征（签收腔/接话腔/比重量/定调收尾/降维断言…见 bagu.mjs）
+  // 就带同样的上下文重答一次（不带 tools 逼她直接给文本，温度抬高一点松绑），新答案命中更少才采纳。
+  // 只补一次、60 秒最多 4 次——八股低频，期望成本接近零；连着八股也别无限烧钱。
+  // 预算只在真的八股时才消耗：先查命中再问额度，别让正常回复把频控窗口吃光
+  const baguHitsNow = out.text && !out.sticker && !out.voice && !out.research ? baguScore(out.text) : 0;
+  if (baguHitsNow >= 2 && baguRollBudget()) {
+    const hits = baguHitsNow;
+    try {
+      const r3 = await llm.chatRawWithFallback(msgs, { maxTokens: cap, temperature: 0.95, tag: 'qq', essential: true, model });
+      const t3 = tidyReply(r3.content);
+      if (t3 && !isThinkingOutLoud(t3) && baguScore(t3) < hits) {
+        out.text = t3;
+        if (r3.content) out.favRaw = r3.content;
+        console.log('[bagu] 八股重roll：换掉了', hits, '类腔调的新回复');
+      }
+    } catch (e) { console.error('[bagu] 重roll没跑成，照发原回复：', e.message); }
+  }
   // 兜底：模型把表情包标记复读成文本——整条光是名字，或正文末尾缀了张图（「揍谁呀… surr_投降」），
   // 都转成真图、正文照常留着发，别让用户看到文件名。已经有 sticker / voice 的不重复转。
   // 自拍名不转：send_selfie 的随机挑选 + 「自拍只给号主」的闸不能绕。
@@ -646,6 +671,16 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
   }
   if (!free && !out.text && !out.sticker && !out.voice) out.text = '嗯？';
   return out;
+}
+
+// 重roll频控：60 秒窗口最多 4 次。窗口滑动的朴素实现就够——这不是精密限流，是防连环八股时烧钱
+let rollTimes = [];
+function baguRollBudget() {
+  const now = Date.now();
+  rollTimes = rollTimes.filter((t) => now - t < 60_000);
+  if (rollTimes.length >= 4) return false;
+  rollTimes.push(now);
+  return true;
 }
 
 // ─── 外挂做完了：用她的口吻说给他听 ─────────────────────────────

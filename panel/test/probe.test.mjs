@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickCandidates, semanticProbe, formatReport, extractQuery, isCountingJunk, hasOriginalLeak } from '../probe-semantic.mjs';
+import { pickCandidates, semanticProbe, formatReport, extractQuery, isCountingJunk, hasOriginalLeak } from '../../ops/probe-semantic.mjs';
 
 const MEM = [
   { id: 'a', text: '昨天中午去楼下吃了一份烧腊饭，味道还行', imp: 4, kind: 'watch' },

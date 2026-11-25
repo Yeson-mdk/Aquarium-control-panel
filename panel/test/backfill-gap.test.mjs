@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DATA } from './_env.mjs';
 import * as memdb from '../memdb.mjs';
-import { backfill } from '../backfill-vec.mjs';
+import { backfill } from '../../ops/backfill-vec.mjs';
 
 // 回归：档案库里有一批「没正文」的旧条目排在最前面时，回填必须越过它们把后面有正文的补齐。
 // 旧写法从 '' 贪心取、todo 空就 break，导致 453 条只补 178 条（漏 255 条）。

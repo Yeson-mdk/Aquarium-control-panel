@@ -20,6 +20,7 @@ import { jitterDelay, gateJitter } from './jitter.mjs';
 import { decideRate, calmMs, exemptKey } from './rate.mjs';
 import { pokeFresh, pokeWindowMs, lastRealChatTs } from './poke-fresh.mjs';
 import * as memory from '../memory.mjs';
+import * as perceive from './perceive.mjs';
 import * as recallCheck from '../recall-check.mjs';
 import * as fav from '../fav.mjs';
 import * as friends from '../friends.mjs';
@@ -237,9 +238,19 @@ async function onMessage(ev) {
       await sendText('好，那我们重新开始聊～', 'report', peer).catch(() => {});
       return;
     }
+    // 机器人名单（感知与打分共用）：名单里的人发的是互刷垃圾，感知也不记进记忆流
+    const botList = String(Array.isArray(cfg.botQQs) ? cfg.botQQs.join(',') : cfg.botQQs || '').split(/[,，\s]+/).filter(Boolean).map(String);
+    const isBot = botList.includes(String(ev.user_id));
     if (text) {
       owner.logChat({ from: 'owner', text, peer, name, fid });
       friends.touch(ev.user_id, name, peer); // 群里说话的人也进朋友圈档案，群里群外对得上号
+      // 序9 感知扩容：非指向她的群消息（背景事件）实时低 imp 进记忆流，不再只靠隔夜的群日结。
+      // 记忆写失败不能挡收消息（perceiveGroup 内部已吞错）；这里只管调用。
+      try {
+        perceive.perceiveGroup({ peer, qq: String(ev.user_id), name, text, at, isBot, replyToMe: /^（回复|^（引用了一条消息/.test(text) });
+        // 序10 实时入口：群里说了件大事（住院/出事/崩溃…），即时记一条带 hook 的 imp4，唤起轻反思+重排
+        perceive.perceiveBig({ peer, qq: String(ev.user_id), name, text, isBot });
+      } catch { /* 感知不挡收消息 */ }
     }
     if (!text) return;
     // 喊停即时取消：白天说「不用叫了」当场停掉他在这个会话的 daily 任务，不等夜间 22 点的约定扫描
@@ -251,9 +262,7 @@ async function onMessage(ev) {
     if (!wantAt && !wantFree) return;
     // 机器人名单：群里其他模型的消息有问有答、句句像「该接的」，权重怎么调都会互刷。
     // 2026-11-19 号主改口径：名单里的人只有 @ 她才接；叫名字 / 短指令 / 怼她都不再放行。
-    // 提前到打分前拦，连 review 仲裁的模型调用都不烧。
-    const botList = String(Array.isArray(cfg.botQQs) ? cfg.botQQs.join(',') : cfg.botQQs || '').split(/[,，\s]+/).filter(Boolean).map(String);
-    const isBot = botList.includes(String(ev.user_id));
+    // botList/isBot 已在收消息开头算好（感知也要用）；这里提前拦，连 review 仲裁的模型调用都不烧。
     if (isBot && !at) {
       try { logAction({ kind: 'gate', source: 'auto', detail: `🤖 机器人名单：${name || ev.user_id} 没 @ 她，不接「${text.slice(0, 30)}」`, meta: { verdict: '拦下', text: String(text || '').slice(0, 60), peer, who: name || String(ev.user_id), bot: true } }); } catch { /* 日志不挡正事 */ }
       return;
@@ -341,6 +350,8 @@ async function onMessage(ev) {
   const fid = randomUUID();
   owner.logChat({ from: 'owner', text, peer, fid });
   if (!isOwner) friends.touch(ev.user_id, ev.sender?.card || ev.sender?.nickname || ''); // 好友也进朋友圈档案
+  // 序10 实时入口：号主/好友私聊说了件大事，即时记一条带 hook 的 imp4，唤起轻反思+重排今日计划
+  try { perceive.perceiveBig({ peer, qq: String(ev.user_id), name: ev.sender?.card || ev.sender?.nickname || '', text }); } catch { /* 感知不挡收消息 */ }
   // 喊停即时取消：号主私聊说「不用叫了」当场停 owner 会话的 daily（owner 会话只有号主，不传 who）；
   // 好友私聊传本人 who+QQ。不 return，让她照常回一句。
   try { appoint.cancelDailyOnStop({ peer, who: isOwner ? '' : (ev.sender?.card || ev.sender?.nickname || ''), whoQq: isOwner ? '' : String(ev.user_id), text }); } catch { /* 停任务不挡收消息 */ }

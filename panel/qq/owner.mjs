@@ -255,7 +255,7 @@ export async function digestGroup(peer, { since, remember, now = Date.now() } = 
   const cut = rows.slice(-150); // 超了只留最近的：晚间的话题最该结
   const speakers = [...new Set(cut.map((r) => r.name))];
   const lines = cut.map((r) => `${r.name}${r.n >= 3 ? `（连说了${r.n}句）` : ''}：${r.text.slice(0, 120)}`);
-  const out = await llm.chat([
+  const messages = [
     { role: 'system', content: `${llm.PERSONA}\n整理一下${isGroup ? '群里' : '私聊里'}这一段聊天，挑出以后还值得她记住的事。只输出 JSON。` },
     { role: 'user', content: `聊天记录（${label}）：
 ${lines.join('\n')}
@@ -264,9 +264,27 @@ ${lines.join('\n')}
 每条带 src：支撑它的原话片段（从上面原样抄，最多 2 条）。
 无法确认是谁说了什么的，不补全、不猜测，直接不写这条。凑不出值得记的就给空数组。
 输出：{"memory":"这段主要聊了什么，一两句（40字内）","items":[{"text":"概括","imp":3,"src":["原话片段"]}]}` },
-  ], { maxTokens: 700, tag: 'qq', essential: true });
-  let j = null;
-  try { j = llm.looseJson(out); } catch { /* 输出根本不是 JSON：当没有条目处理，别让今晚的日结炸掉 */ }
+  ];
+  // 超长 prompt + 默认高温度时网关偶发回纯文字/空回包，looseJson 直接抛「没有 JSON」，
+  // 旧代码静默吞掉 → 日结日志只显示"记了 0 条"，分不清是模型真判空还是调用失败（2026-11-25 排障）。
+  // 照 mind.ask 的模式：低温 + 重试，重试彻底失败打一条告警带原始输出，方便事后核对。
+  let j = null, out = '', parseErr = null;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      out = String(await llm.chat(messages, { maxTokens: 700, temperature: 0.15, tag: 'qq', essential: true }) || '');
+      j = llm.looseJson(out);
+      break;
+    } catch (e) {
+      parseErr = e;
+      if (/预算用完|额度用完/.test(String(e?.message || ''))) break;
+      if (attempt >= 2) break; // 最多 3 次
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  }
+  if (parseErr && !j) {
+    // 全失败：保留 0 条的旧行为不炸，但把原始输出露出来，下次看日志就能判是调用失败还是真没得结
+    try { logAction({ kind: 'qq', source: 'auto', ok: false, detail: `⚠️ ${label} 日结没能解析（读了 ${talk.length} 条）：${String(parseErr.message || parseErr).slice(0, 60)}｜原文：${out.slice(0, 160) || '（空回包）'}` }); } catch { /* 日志不挡日结 */ }
+  }
   const dropped = [];
   const items = (j && Array.isArray(j.items) ? j.items : [])
     .map((x) => ({

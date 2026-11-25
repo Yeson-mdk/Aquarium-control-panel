@@ -11,14 +11,14 @@
  *  - 失败静默：没配向量模型 / 接口挂了 → 说明原因就退出，不炸、不半途留下脏数据
  *  - 单条写走 memdb.setVec，绝不调 syncAll（否则全量覆盖会把补好的刷回 null）
  *
- * 跑法：node panel/backfill-vec.mjs
+ * 跑法：node ops/backfill-vec.mjs
  * 向量模型名在面板「模型设置 → 向量模型」填（config.llm.embeddingModel），留空=不跑。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, logAction } from './store.mjs';
-import * as llm from './llm.mjs';
-import * as memdb from './memdb.mjs';
+import { DATA, logAction } from '../panel/store.mjs';
+import * as llm from '../panel/llm.mjs';
+import * as memdb from '../panel/memdb.mjs';
 
 const BATCH = 20;
 const FILE = join(DATA, 'memories.json');
@@ -78,7 +78,7 @@ export async function backfill({ embedFn = (texts) => llm.embed(texts), batch = 
   return stats;
 }
 
-// 手动跑：node panel/backfill-vec.mjs
+// 手动跑：node ops/backfill-vec.mjs
 if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/backfill-vec.mjs')) {
   memdb.init();
   const before = memdb.vecStats();

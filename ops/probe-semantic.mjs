@@ -7,9 +7,9 @@
  * 向量命中 ≥7/10 = 阶段四值得留；向量和关键词差不多 = 这 10 条换说法不够换，或向量没真启用。
  *
  * 跑法（在 NAS 上）：
- *   node panel/probe-semantic.mjs              # 默认抽 10 条，问法模型默认 deepseek-chat（稳）
- *   node panel/probe-semantic.mjs 20           # 抽 20 条（更慢，更准）
- *   node panel/probe-semantic.mjs 10 --model auto  # 换回面板里日常聊天的主模型生成问法
+ *   node ops/probe-semantic.mjs              # 默认抽 10 条，问法模型默认 deepseek-chat（稳）
+ *   node ops/probe-semantic.mjs 20           # 抽 20 条（更慢，更准）
+ *   node ops/probe-semantic.mjs 10 --model auto  # 换回面板里日常聊天的主模型生成问法
  *
  * 关于问法模型：默认 deepseek-chat 只影响探针的「换说法」质量，不改面板日常聊天的主模型。
  * 用环境变量 YANGYU_PROBE_MODEL 可永久改默认值。
@@ -22,10 +22,10 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, readConfig } from './store.mjs';
-import * as llm from './llm.mjs';
-import * as memory from './memory.mjs';
-import * as memdb from './memdb.mjs';
+import { DATA, readConfig } from '../panel/store.mjs';
+import * as llm from '../panel/llm.mjs';
+import * as memory from '../panel/memory.mjs';
+import * as memdb from '../panel/memdb.mjs';
 
 const FILE = join(DATA, 'memories.json');
 const DEFAULT_COUNT = 10;
@@ -269,7 +269,7 @@ export async function semanticProbe({
     out.reason = `${bits.join('、')}，按剩余 ${done} 条真实问法判定；这些不计入分母`;
   }
   else if (!embedReady) out.reason = '没配向量模型：这一轮向量列等于关键词列，先去「模型设置 → 向量模型」填一个 embedding 模型 ID';
-  else if (out.vecCovered === 0) out.reason = '向量还没回填：去 NAS 跑一次 node panel/backfill-vec.mjs，再重跑本探针';
+  else if (out.vecCovered === 0) out.reason = '向量还没回填：去 NAS 跑一次 node ops/backfill-vec.mjs，再重跑本探针';
   else if (out.rows.some((r) => r.noVec)) out.reason = '部分查询没打成向量（接口抖动），结果偏保守，可以重跑一次';
   return out;
 }
@@ -301,7 +301,7 @@ export function formatReport(r) {
   lines.push(`   关键词命中：${r.kwHits}/${eff}    向量命中：${r.vecHits}/${eff}    干净样本向量：${r.cleanVecHits ?? r.vecHits}/${clean}    向量净贡献：${r.netGain ?? 0} 条${dropped.length ? `（另有 ${dropped.join('、')}，未计入判定）` : ''}`);
   if (r.reason) lines.push(`   ⚠️  ${r.reason}`);
   if (r.pass) {
-    const small = r.picked < DEFAULT_COUNT ? `（只抽了 ${r.picked} 条，样本偏小，建议跑 \`node panel/probe-semantic.mjs\` 抽满 10 条复核）` : '';
+    const small = r.picked < DEFAULT_COUNT ? `（只抽了 ${r.picked} 条，样本偏小，建议跑 \`node ops/probe-semantic.mjs\` 抽满 10 条复核）` : '';
     lines.push(`   ✅ 达标（干净样本向量 ${r.cleanVecHits ?? r.vecHits}/${clean}）——向量粗排留着，阶段四 4A 可以验收${small}`);
   } else if (r.embedReady && r.vecCovered > 0) {
     const pinned = r.rewriteModel ? `（本轮问法模型 ${r.rewriteModel}）` : '';
@@ -309,7 +309,7 @@ export function formatReport(r) {
       // 还有空回话/废话才提示换模型；已经指定了模型就别再重复这句死循环提示
       if (!r.rewriteModel) {
         lines.push(`   ⚠️ 未达标${pinned}，本轮有空回话/废话拖累问法质量——给探针单独指定稳模型（不碰日常聊天）：`);
-        lines.push('        node panel/probe-semantic.mjs 10 --model deepseek-chat');
+        lines.push('        node ops/probe-semantic.mjs 10 --model deepseek-chat');
       } else {
         lines.push(`   ⚠️ 未达标${pinned}，本轮仍有空回话/废话；已是指定模型还这样就重跑一次（接口抖动），调 vecW 救不了问法质量。`);
       }
@@ -324,10 +324,10 @@ export function formatReport(r) {
   return lines.join('\n');
 }
 
-// 手动跑：node panel/probe-semantic.mjs [条数] [--model 模型名]
+// 手动跑：node ops/probe-semantic.mjs [条数] [--model 模型名]
 //   --model 只换「生成换说法」用的模型，不改面板里日常聊天的主模型。
 //   默认 deepseek-chat（稳）；--model auto = 回到面板主模型。
-//   例：node panel/probe-semantic.mjs 10 --model deepseek-chat
+//   例：node ops/probe-semantic.mjs 10 --model deepseek-chat
 if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/probe-semantic.mjs')) {
   memdb.init();
   const a = process.argv.slice(2);

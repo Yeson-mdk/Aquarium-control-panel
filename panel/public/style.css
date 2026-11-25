@@ -421,72 +421,105 @@ label.f { display: block; font-size: 12px; color: var(--text2); margin-bottom: 5
 .vip-q { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--card2); font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
 .vip-q a { color: var(--blue); }
 
-/* 记忆页 · 朋友们：群多时长文本不撑破手机屏 */
-.friend-list li { align-items: flex-start; }
-.friend-item { flex: 1; min-width: 0; }
-.friend-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.friend-groups { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
-.friend-notes > div { overflow-wrap: anywhere; }
-.friend-note { display: flex; align-items: flex-start; gap: 5px; }
-.friend-note-text { flex: 1; min-width: 0; }
-.btn-mini { font-size: 12px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card2); color: var(--text2); cursor: pointer; flex-shrink: 0; }
-.btn-mini:hover { border-color: var(--red); color: var(--red); }
-.friend-note .btn-mini { padding: 1px 6px; font-size: 11px; }
-.friend-del { margin-top: 6px; }
-@media (max-width: 600px) { .friend-groups { font-size: 11px; } }
+/* ══ 记忆页（作用域 .memCard，不碰「特别关注」等其它列表）══
+   层级：一级标签 → 二级标签 → 分组 → 条目 → 元信息，统一字号/间距/配色。 */
+.memCard:hover { transform: none; } /* 内容长，取消整卡上浮，减少晃动 */
 
-/* ── 记忆页：只作用于记忆卡内的列表，不碰「特别关注」等其它 .vip-list ── */
-.memCard .card-h { margin-bottom: 12px; }
-/* 记忆条目：淡卡片 + hover 高亮；操作按钮平时半透明、hover 整行才显出来（不隐藏，仍可点） */
-.memCard .vip-list { gap: 6px; }
-.memCard .vip-list > li {
-  padding: 8px 10px; border: 1px solid transparent; border-radius: 9px;
-  transition: background .15s, border-color .15s;
-}
-.memCard .vip-list > li:hover { background: var(--card2); border-color: var(--line); }
-.memCard .vip-list > li .btn.ghost { opacity: .5; transition: opacity .15s; }
-.memCard .vip-list > li:hover .btn.ghost, .memCard .vip-list > li .btn.ghost:focus-visible { opacity: 1; }
-/* 分组小标题（今天 / 昨天 / 印象 / 待审洞察…）：左侧渐变竖条，跟页头呼应 */
-.memCard .sec-k {
-  display: inline-flex; align-items: center; gap: 7px; font-weight: 700; color: var(--text);
-}
-.memCard .sec-k::before {
-  content: ''; width: 3px; height: 13px; border-radius: 2px; flex: none;
-  background: linear-gradient(180deg, var(--blue), var(--violet));
-}
-/* 折叠块（更早的日子 / 被推翻的洞察）：统一成面板风格，去掉浏览器默认三角 */
-.memCard details.mem-fold { margin-top: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card2); }
-.memCard details.mem-fold > summary {
-  cursor: pointer; padding: 7px 11px; font-size: 12px; color: var(--muted); list-style: none;
-  display: flex; align-items: center; gap: 6px; user-select: none;
-}
+/* 卡片头：标题与说明两端对齐，窄屏换行 */
+.memCard .mem-card-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.memCard .mem-card-h h2 { margin: 0; font-size: 15px; font-weight: 650; color: var(--text); }
+.memCard .mem-hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.memCard .mem-hint-block { display: block; margin: 10px 0 12px; }
+
+/* 两级标签：一级实心分段，二级弱化（去掉背景边框，靠下方留白区分），避免重复 */
+.memCard .mem-subseg { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 18px; }
+.memCard .mem-subseg button.on { box-shadow: none; background: var(--blue-soft); color: var(--blue); }
+.memCard .mem-pane { min-width: 0; }
+
+/* 日子日期选择：一行工具条，窄屏自动换行；原生 date 控件跟随系统日历 */
+.memCard .mem-daypick { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 0 0 16px; padding: 10px 12px; border-radius: 10px; background: var(--card2); }
+.memCard .mem-daypick label { font-size: 12px; font-weight: 600; color: var(--text2); white-space: nowrap; }
+.memCard .mem-daypick input[type=date] { flex: 0 0 auto; width: 168px; font: inherit; font-size: 13px; color: var(--text); background: var(--card); border: 1px solid var(--line2); border-radius: 8px; padding: 5px 9px; }
+.memCard .mem-daypick input[type=date]:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.memCard .mem-daypick .btn.ghost { padding: 5px 10px; }
+.memCard .mem-daypick .btn:disabled { opacity: .45; cursor: default; }
+.memCard .mem-daypick .mem-hint { margin-left: auto; white-space: nowrap; }
+
+/* 分组：靠留白与细分隔线区分，不再用渐变竖条；首组无上边框 */
+.memCard .mem-group { padding: 14px 0 4px; border-top: 1px solid var(--line); }
+.memCard .mem-group:first-child { padding-top: 2px; border-top: 0; }
+.memCard .mem-group-h { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 10px; }
+.memCard .mem-group-t { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.memCard .mem-group-n { font-size: 12px; color: var(--blue); font-variant-numeric: tabular-nums; }
+.memCard .mem-group-note { flex-basis: 100%; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+/* 折叠分组：整块标题即 summary，去掉默认三角与底框 */
+.memCard details.mem-fold { padding-top: 12px; }
+.memCard details.mem-fold > summary { cursor: pointer; list-style: none; user-select: none; margin-bottom: 0; }
 .memCard details.mem-fold > summary::-webkit-details-marker { display: none; }
-.memCard details.mem-fold > summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
-.memCard details.mem-fold[open] > summary::before { transform: rotate(90deg); }
-.memCard details.mem-fold > .vip-list { padding: 2px 11px 9px; }
-/* 朋友们：一人一块淡卡片，层次更清楚；好感度高亮；备注加小圆点 */
-.memCard .friend-list { gap: 10px; }
-.memCard .friend-list > li {
-  padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--card2);
-}
+.memCard details.mem-fold > summary .mem-group-h { margin-bottom: 0; }
+.memCard details.mem-fold > summary .mem-group-t::before { content: '▸'; display: inline-block; font-size: 10px; color: var(--muted); margin-right: 6px; transition: transform .15s; }
+.memCard details.mem-fold[open] > summary .mem-group-t::before { transform: rotate(90deg); }
+.memCard details.mem-fold[open] > summary .mem-group-h { margin-bottom: 10px; }
+
+/* 条目：图标 / 正文 / 操作三列对齐，正文优先换行，按钮列恒定不挤压 */
+.memCard .mem-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.memCard .mem-entry { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 9px; border: 1px solid transparent; transition: background .15s, border-color .15s; }
+.memCard .mem-entry:hover { background: var(--card2); border-color: var(--line); }
+.memCard .mem-entry-ico { flex: none; width: 20px; text-align: center; font-size: 13px; line-height: 1.7; }
+.memCard .mem-entry-body { flex: 1; min-width: 0; }
+.memCard .mem-entry-text { font-size: 13px; color: var(--text); line-height: 1.65; overflow-wrap: anywhere; }
+.memCard .mem-entry-muted .mem-entry-text { color: var(--muted); }
+.memCard .mem-meta { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin-top: 2px; overflow-wrap: anywhere; }
+.memCard .mem-dot { margin: 0 6px; opacity: .7; }
+.memCard .mem-entry-act { flex: none; display: flex; gap: 4px; }
+.memCard .mem-entry-act .btn.ghost { padding: 3px 8px; font-size: 12px; opacity: .65; }
+.memCard .mem-entry:hover .mem-entry-act .btn.ghost, .memCard .mem-entry-act .btn.ghost:focus-visible { opacity: 1; }
+.memCard .chip.mini { font-size: 11px; padding: 0 7px; }
+.memCard .mem-kind { margin-right: 8px; vertical-align: 1px; }
+
+/* 待审洞察：保留语义底色，内部用统一分组头/条目 */
+.memCard .mem-pending { margin: 14px 0 2px; padding: 12px 14px; border-radius: 11px; background: var(--amber-soft); }
+.memCard .mem-pending .mem-group-t { color: var(--amber); }
+/* 整理行 / 档案搜索 / 统计条 */
+.memCard .mem-more { margin: 8px 0 2px; }
+.memCard .mem-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.memCard .mem-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.memCard .mem-search { display: flex; gap: 8px; }
+.memCard .mem-search input { flex: 1; min-width: 0; }
+.memCard .mem-search-out { margin-top: 16px; }
+
+/* 朋友们：一人一块淡卡片；长群名、长备注不撑破窄屏 */
+.memCard .friend-list { display: flex; flex-direction: column; gap: 10px; }
+.memCard .friend-list > li { padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--card2); transition: border-color .15s; }
 .memCard .friend-list > li:hover { border-color: var(--violet); }
-.memCard .friend-title { margin-bottom: 3px; }
-.memCard .friend-note { position: relative; padding-left: 13px; }
-.memCard .friend-note::before {
-  content: ''; position: absolute; left: 1px; top: .55em; width: 5px; height: 5px;
-  border-radius: 50%; background: var(--violet); opacity: .55;
+.memCard .friend-item { flex: 1; min-width: 0; font-size: 13px; }
+.memCard .friend-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 4px; }
+.memCard .friend-groups { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.memCard .friend-notes { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.memCard .friend-notes > div { overflow-wrap: anywhere; }
+.memCard .friend-note { position: relative; display: flex; align-items: flex-start; gap: 6px; padding-left: 14px; line-height: 1.6; }
+.memCard .friend-note::before { content: ''; position: absolute; left: 2px; top: .7em; width: 5px; height: 5px; border-radius: 50%; background: var(--violet); opacity: .6; }
+.memCard .friend-note-text { flex: 1; min-width: 0; }
+.memCard .friend-social { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--violet-soft); color: var(--text2); font-size: 12px; line-height: 1.65; }
+.memCard .btn-mini { font-size: 12px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--text2); cursor: pointer; flex-shrink: 0; }
+.memCard .btn-mini:hover { border-color: var(--red); color: var(--red); }
+.memCard .friend-note .btn-mini { padding: 1px 6px; font-size: 11px; }
+.memCard .friend-del { margin-top: 8px; }
+
+/* 窄屏：一级标签可横向滚动，条目收紧留白、元信息完整换行 */
+@media (max-width: 600px) {
+  .memCard .mem-topseg { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+  .memCard .mem-topseg button { flex: none; white-space: nowrap; }
+  .memCard .mem-card-h { margin-bottom: 10px; }
+  .memCard .mem-daypick { gap: 8px; }
+  .memCard .mem-daypick input[type=date] { width: 150px; }
+  .memCard .mem-daypick .mem-hint { flex-basis: 100%; margin-left: 0; }
+  .memCard .mem-entry { gap: 7px; padding: 8px 4px; }
+  .memCard .mem-entry-ico { width: 17px; }
+  .memCard .mem-search { flex-wrap: wrap; }
+  .memCard .mem-search input { flex-basis: 100%; }
+  .memCard .friend-groups { font-size: 11px; }
 }
-/* 朋友档案近况：淡色提示条 */
-.memCard .friend-social {
-  padding: 9px 12px; margin: 0 0 12px; border-radius: 9px;
-  background: var(--violet-soft); color: var(--text2); border: 1px solid transparent;
-}
-/* 待审洞察：淡色底，提示「需要你放行」 */
-.memCard .mem-pending {
-  padding: 10px 12px; margin: 10px 0 4px; border-radius: 10px;
-  background: var(--amber-soft); border: 1px solid transparent;
-}
-.memCard .mem-pending .k { color: var(--amber); }
 
 /* 扫码登录 */
 .login-banner { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px; background: var(--red-soft); color: var(--red); font-size: 14px; font-weight: 600; }
