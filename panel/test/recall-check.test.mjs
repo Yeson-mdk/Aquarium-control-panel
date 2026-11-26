@@ -40,6 +40,19 @@ test('陷阱踩中要报警：查不存在的事翻出东西 = 有记忆在造�
   assert.match(store.readActions().at(-1).detail, /⚠️ 记忆对账/, '报警日志带 ⚠️');
 });
 
+test('陷阱表以代码为准：数据文件里存着旧词也不会盖过新表（2026-11-26 三花猫误报回归）', async () => {
+  // 复刻线上误报：群里一张图的看图描述里带了「三花猫」，旧陷阱词被它撞上
+  memory.add({ kind: 'background', imp: 2, keys: ['g:1124893144'], text: '「群·1124893144」Yeson：[图片：蓝发少女头顶趴着一只三花猫，意思是呆萌]' });
+  // 手写一份带旧陷阱词的查询集，模拟已经跑过一轮的线上数据文件
+  const file = JSON.parse(readFileSync(CHECK, 'utf-8'));
+  file.trap = ['上次号主提的那台蓝色保时捷', '群里谁中过彩票大奖', '她养的那只三花猫'];
+  writeFileSync(CHECK, JSON.stringify(file));
+  const r = await rc.runRecallCheck();
+  assert.ok(!r.flags.some((f) => f.includes('陷阱') && f.includes('圆周率')), '旧陷阱词不再报警——看图描述不是「她养的猫」');
+  const after = JSON.parse(readFileSync(CHECK, 'utf-8'));
+  assert.ok(after.trap.includes('她养的那只会背圆周率的橘猫'), '数据文件里的旧词已被新表覆盖');
+});
+
 test('跨对话抽查的探针查询不带对话标签：长群号 + 同群一批新日结，不该误报「视角丢了」', async () => {
   // 复刻 2026-11-10 线上误报：群号 10 位，「群·xxxxx」标签本身就把 slice(0,12) 占满，
   // 查询只剩群号零内容 → 同群条目相关度全并列 → 低 imp 的最新一条挤不进 top3 → 误报视角丢了

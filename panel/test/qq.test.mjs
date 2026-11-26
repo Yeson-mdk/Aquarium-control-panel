@@ -464,6 +464,23 @@ test('阶段一 digestGroup：解析彻底失败打告警留原始输出，不�
   llmQueue.length = 0;
 });
 
+test('阶段一 digestGroup：超长聊天封顶 6000 字、重试逐级砍半、告警带 prompt 字数（2026-11-26 空回包回归）', async () => {
+  const g = 'g:9012';
+  // 造 120 条互不相同的长消息，拼起来远超 6000 字——昨晚 187 条空回包的形状
+  for (let i = 0; i < 120; i++) owner.logChat({ from: 'owner', name: i % 2 ? '甲' : '乙', text: `第${i}句`.padEnd(80, '字'), peer: g });
+  // 三次都空回包（mock 队列耗尽回「嗯嗯」，looseJson 一样解析失败）
+  const before = store.readActions().length;
+  const r = await owner.digestGroup(g, { remember: () => {} });
+  assert.equal(r.items, 0, '全失败仍 0 条不炸');
+  const calls = llmCalls.slice(-3).map((c) => c.messages.at(-1).content);
+  assert.ok(calls[0].length > 6000 && calls[0].length < 7000, '首轮封顶在 6000 字上下，不是上万字');
+  assert.ok(calls[1].length < calls[0].length && calls[2].length < calls[1].length, '重试逐级砍半');
+  assert.ok(!calls[0].includes('水文第0条'), '从尾部取最近的，开头的水文被裁掉');
+  const alerted = store.readActions().slice(before).find((a) => /日结没能解析/.test(a.detail || ''));
+  assert.ok(alerted && /prompt \d+ 字第 3 次/.test(alerted.detail), '告警带 prompt 字数和重试次数，能一眼判是长度顶住');
+  llmQueue.length = 0;
+});
+
 test('阶段一 digestCandidates：按今天条数排、冷清的筛掉、最多 3 个', () => {
   for (let i = 0; i < 10; i++) owner.logChat({ from: 'owner', name: '甲', text: `调度甲${i}`, peer: 'g:9100' });
   for (let i = 0; i < 8; i++) owner.logChat({ from: 'owner', name: '乙', text: `调度乙${i}`, peer: 'g:9101' });

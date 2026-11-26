@@ -23,7 +23,11 @@ const LAST = join(DATA, 'recall-check-last.json');
 const MAX_KEEP = 18;
 
 // 陷阱：查从没发生过的事，永远该空手而归。翻出东西 = 有记忆在造假，顺着 src/from 去对账
-const TRAPS = ['上次号主提的那台蓝色保时捷', '群里谁中过彩票大奖', '她养的那只三花猫'];
+// 别用群里真会出现的具体物件当陷阱：原「她养的那只三花猫」撞上了 2026-11-25 群里一张
+// 看图描述（「蓝发少女头顶趴着一只三花猫」），关键词重合就报警，是假阳性不是造假。
+// 光加限定词还不够——文本一短，「三花猫」的二字片段照样压过限定词；得用现实里不可能
+// 同时出现的荒诞组合（会背圆周率的橘猫），撞上了才有理由怀疑真有记忆在编。
+const TRAPS = ['上次号主提的那台蓝色保时捷', '群里谁中过彩票大奖', '她养的那只会背圆周率的橘猫'];
 
 // 从一条记忆挖「该想得起来」的查询：去掉「群·xxx」这类标签，取开头一段有辨识度的话
 const mineQ = (text) => String(text || '').replace(/^「[^」]*」/, '').replace(/^看了《/, '').slice(0, 10).trim();
@@ -66,6 +70,9 @@ export function runRecallCheck() {
   let check = load();
   const fresh = !check;
   if (fresh) { check = seed(view); }
+  // 陷阱表以代码为准：老数据文件里存的旧词不该盖过新表（不然改了 TRAPS 也不生效，
+  // 2026-11-26 三花猫误报就是这么一直挂着的）。keep 是现场自养的，照旧读文件。
+  if (check) check.trap = TRAPS;
   const flags = [];
   const keepNext = [];
   let healed = 0;

@@ -255,35 +255,53 @@ export async function digestGroup(peer, { since, remember, now = Date.now() } = 
   const cut = rows.slice(-150); // 超了只留最近的：晚间的话题最该结
   const speakers = [...new Set(cut.map((r) => r.name))];
   const lines = cut.map((r) => `${r.name}${r.n >= 3 ? `（连说了${r.n}句）` : ''}：${r.text.slice(0, 120)}`);
-  const messages = [
+  // 聊天正文封顶：187 条 × 每行 120 字 = 上万字，网关对这种超长 prompt 直接空回包
+  // （2026-11-25 群·1124893144 实测：6 次请求全空，同一分钟洞察/复盘/朋友都正常）。
+  // 从尾部按整行取最近 6000 字——晚间话题最该结，也不切断任何一行。
+  const CHAT_CAP = 6000;
+  const tail = [];
+  let tailLen = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const add = lines[i].length + 1;
+    if (tailLen + add > CHAT_CAP && tail.length) break;
+    tail.unshift(lines[i]);
+    tailLen += add;
+  }
+  const chatBody = tail.join('\n');
+  const makeMessages = (body) => [
     { role: 'system', content: `${llm.PERSONA}\n整理一下${isGroup ? '群里' : '私聊里'}这一段聊天，挑出以后还值得她记住的事。只输出 JSON。` },
     { role: 'user', content: `聊天记录（${label}）：
-${lines.join('\n')}
+${body}
 
 从中挑出值得记的事，最多 8 条，每条：一句话、第三人称、写清是谁的事——名字只能用上面出现过的，没用过的人名不许出现。每条标重要程度：1=随口闲聊，3=有点意思，5=对她重要、会想再提起。
 每条带 src：支撑它的原话片段（从上面原样抄，最多 2 条）。
 无法确认是谁说了什么的，不补全、不猜测，直接不写这条。凑不出值得记的就给空数组。
 输出：{"memory":"这段主要聊了什么，一两句（40字内）","items":[{"text":"概括","imp":3,"src":["原话片段"]}]}` },
   ];
-  // 超长 prompt + 默认高温度时网关偶发回纯文字/空回包，looseJson 直接抛「没有 JSON」，
-  // 旧代码静默吞掉 → 日结日志只显示"记了 0 条"，分不清是模型真判空还是调用失败（2026-11-25 排障）。
-  // 照 mind.ask 的模式：低温 + 重试，重试彻底失败打一条告警带原始输出，方便事后核对。
-  let j = null, out = '', parseErr = null;
+  // 超长 prompt + 高温度时网关偶发回纯文字/空回包，looseJson 直接抛「没有 JSON」。
+  // 旧代码静默吞掉 → 日志只显示"记了 0 条"，分不清模型真判空还是调用失败（2026-11-25 排障）。
+  // 低温 + 阶梯重试：第一次用封顶后的全文，再失败逐级砍半（只留更近的聊天），避开网关冷却窗，
+  // 彻底失败打一条带原始输出 + prompt 字数的告警，方便事后核对（2026-11-26 补）。
+  let j = null, out = '', parseErr = null, promptLen = 0, usedAttempt = 0;
   for (let attempt = 0; ; attempt++) {
+    const budget = Math.max(600, Math.ceil(chatBody.length / (2 ** attempt)));
+    const body = chatBody.slice(-budget);
+    promptLen = body.length;
+    usedAttempt = attempt + 1;
     try {
-      out = String(await llm.chat(messages, { maxTokens: 700, temperature: 0.15, tag: 'qq', essential: true }) || '');
+      out = String(await llm.chat(makeMessages(body), { maxTokens: 700, temperature: 0.15, tag: 'qq', essential: true }) || '');
       j = llm.looseJson(out);
       break;
     } catch (e) {
       parseErr = e;
       if (/预算用完|额度用完/.test(String(e?.message || ''))) break;
       if (attempt >= 2) break; // 最多 3 次
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
   if (parseErr && !j) {
-    // 全失败：保留 0 条的旧行为不炸，但把原始输出露出来，下次看日志就能判是调用失败还是真没得结
-    try { logAction({ kind: 'qq', source: 'auto', ok: false, detail: `⚠️ ${label} 日结没能解析（读了 ${talk.length} 条）：${String(parseErr.message || parseErr).slice(0, 60)}｜原文：${out.slice(0, 160) || '（空回包）'}` }); } catch { /* 日志不挡日结 */ }
+    // 全失败：保留 0 条的旧行为不炸，但把原始输出和 prompt 规模露出来，下次看日志就能判是长度顶住还是真没得结
+    try { logAction({ kind: 'qq', source: 'auto', ok: false, detail: `⚠️ ${label} 日结没能解析（读了 ${talk.length} 条，prompt ${promptLen} 字第 ${usedAttempt} 次）：${String(parseErr.message || parseErr).slice(0, 60)}｜原文：${out.slice(0, 160) || '（空回包）'}` }); } catch { /* 日志不挡日结 */ }
   }
   const dropped = [];
   const items = (j && Array.isArray(j.items) ? j.items : [])
