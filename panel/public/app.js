@@ -155,6 +155,9 @@ function route() {
   renderNav();
   const main = $('#main');
   main.innerHTML = '';
+  main.classList.remove('page-in');
+  void main.offsetWidth; // 强制重排：让 page-in 动画每次切页都能重放
+  main.classList.add('page-in');
   main.scrollTop = 0;
   window.scrollTo(0, 0);
   ({ overview: pageOverview, activity: pageActivity, autopilot: pageAutopilot, explore: pageExplore, inbox: pageInbox, review: pageReview, memory: pageMemory, stickers: pageStickers, tuning: pageTuning, gate: pageGate, botscore: pageBotscore, diary: pageDiary })[S.page](main);
