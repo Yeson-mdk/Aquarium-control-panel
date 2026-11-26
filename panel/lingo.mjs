@@ -6,8 +6,11 @@
  *  1. 收集（collect）：每认真看完一个视频，把热评里赞多的几条攒进「今天见过的评论」。
  *  2. 学（learn）：每晚睡前翻一遍，挑出她看得懂、又真在流行的说法（梗、口头禅、新词），记下意思和例句；
  *     已经会的又见到了就算「又碰到一次」。45 天没再碰到的慢慢忘掉，最多记 50 个。
- *  3. 用（lingoText）：她写评论、在评论区接话时，把最近常见的几个说法给她看，合适就自然用一个。
+ *  3. 用（lingoText）：挑几个说法端到聊天眼前——睡前反思时她自己挑 3 个「明天想试着用起来的」，
+ *     没挑成就按日期轮换（同一天稳定，前缀缓存不受影响）。措辞是主动口吻：这是她自己的口癖，
+ *     不是「别人提到才接」的词典。带例句，照着学用法。
  *     新学会的也写进 DSH 记忆，QQ 里的她也会知道。
+ *  4. 用了才算会（markUsed）：回复文本里真用上了就记一笔（used/usedAt），喂回第二天睡前挑词。
  *
  * 只从B站学。号主的口头禅由 QQ 里的她用记忆工具自己记（AGENTS.md），不拿到B站公开评论里用。
  * 脏话、引战、地域黑、擦边的不学。数据在 data/lingo.json。
@@ -93,7 +96,7 @@ export async function learn({ remember, today = localDate() } = {}) {
   if (l.inbox.length < 5 || !llm.llmReady()) {
     const { words, forgot } = absorb(l, {}, today);
     writeLingo({ ...l, words });
-    return { fresh: [], forgot };
+    return { fresh: [], forgot, daily: [] };
   }
   let j;
   try {
@@ -102,26 +105,75 @@ export async function learn({ remember, today = localDate() } = {}) {
       { role: 'user', content: `今天见过的热评：
 ${l.inbox.map((t) => `- ${llm.fence(t, 80)}`).join('\n')}
 
-你已经会的说法：${l.words.map((w) => `「${w.phrase}」`).join('') || '（还没有）'}
+你已经会的说法（碰到=在评论区见到的次数，用过=聊天里真用过的次数）：${l.words.map((w) => `「${w.phrase}」=${w.meaning}（碰到${w.n}次、${w.used ? `用过${w.used}次` : '还没用过'}）`).join('；') || '（还没有）'}
 
 挑出 0~5 个**新的**、网友之间在流行的说法（梗、口头禅、新词、固定句式），你得看得懂它什么意思。
 普通词、整句话、人名、脏话、引战、地域黑、擦边、骂人的都不要；求赞、求关注、求三连这类引流句式也不要。已经会的说法今天又见到了，放进 seen。
-{"new":[{"phrase":"说法本身，2~12字","meaning":"什么意思、什么时候用，20字内","example":"热评里用它的那句"}],"seen":["今天又见到的已会说法"]}` },
-    ], { maxTokens: 700, tag: 'lingo', essential: true });
+另外从你已经会的说法里挑 3 个明天聊天时想试着自然用起来的——优先挑自己真用得上的、还没怎么用过的；一直没用上的说明不合适，就别再挑它。没有想用的就给空数组，放进 daily。
+{"new":[{"phrase":"说法本身，2~12字","meaning":"什么意思、什么时候用，20字内","example":"热评里用它的那句"}],"seen":["今天又见到的已会说法"],"daily":["明天想用的说法"]}` },
+    ], { maxTokens: 900, tag: 'lingo', essential: true });
     j = llm.looseJson(out);
   } catch {
     writeLingo(l); // 今天算学过了，明天接着用攒的
     return null;
   }
   const { words, fresh, forgot } = absorb(l, j, today);
-  writeLingo({ ...l, inbox: [], words });
+  const daily = pickPhrases({ words }, j?.daily, 3).map((w) => w.phrase);
+  writeLingo({ ...l, inbox: [], words, daily: { date: today, phrases: daily } });
   if (remember) for (const w of fresh) remember(`我（肥鱼）在B站学了个新说法：「${w.phrase}」，${w.meaning}`);
-  return { fresh, forgot };
+  return { fresh, forgot, daily };
 }
 
-/** 给写评论、接话用：最近常碰到的几个说法 */
-export function lingoText(k = 4) {
-  const words = readLingo().words.slice(0, k);
+/** 睡前挑的「明天想用的」还在保鲜期（≤1 天，昨晚挑的今天全天用）就用她挑的；过期的按日期轮换 */
+export function pickDaily(l, k = 5, today = localDate()) {
+  const words = l.words || [];
+  if (!words.length) return [];
+  if (l.daily && Array.isArray(l.daily.phrases) && daysSince(l.daily.date, today) <= 1) {
+    const picked = l.daily.phrases
+      .map((p) => words.find((w) => w.phrase === String(p).trim()))
+      .filter(Boolean)
+      .slice(0, k);
+    if (picked.length) return picked;
+  }
+  return seededShuffle(words, today).slice(0, k); // 同一天选词稳定（逐字不变的前缀才吃得到缓存）
+}
+
+/** 从候选短语里挑出词库里真有的（learn 睡前挑词用；纯函数方便测） */
+export function pickPhrases(l, phrases, k) {
+  const out = [];
+  for (const p of Array.isArray(phrases) ? phrases : []) {
+    const w = l.words.find((x) => x.phrase === String(p).trim());
+    if (w && !out.includes(w)) out.push(w);
+    if (out.length >= k) break;
+  }
+  return out;
+}
+
+/** 以日期字符串做种子的洗牌：同一天同一份词表 → 同一个结果 */
+function seededShuffle(arr, seed) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) { h ^= seed.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const next = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return (h >>> 0) / 4294967296; };
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(next() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+/** 给写评论、接话用：今天轮到的几个说法。主动口吻——是她自己的口癖，不是「别人提到才接」的词典 */
+export function lingoText(k = 5, today = localDate()) {
+  const words = pickDaily(readLingo(), k, today);
   if (!words.length) return '';
-  return `你最近在B站学会的说法（合适就自然用一个，不合适千万别硬塞，大多数时候不用）：${words.map((w) => `「${w.phrase}」= ${w.meaning}`).join('；')}`;
+  return `你最近在B站学会的说法，已经是你自己的口癖——说话时会自然带出来，吐槽、夸东西、表达无语的时候顺手冒一句，别解释意思、别硬凑，聊几次里冒一次就刚好：${words.map((w) => `「${w.phrase}」= ${w.meaning}${w.example ? `（比如：${w.example}）` : ''}`).join('；')}`;
+}
+
+/** 用了才算会：她真把学过的说法用进回复了就记一笔（喂回睡前挑词——用得上的优先留，一直用不上的换掉） */
+export function markUsed(text, today = localDate()) {
+  const t = String(text || '');
+  if (!t) return [];
+  const l = readLingo();
+  const hit = l.words.filter((w) => w.phrase.length >= 2 && t.includes(w.phrase));
+  if (!hit.length) return [];
+  for (const w of hit) { w.used = (w.used || 0) + 1; w.usedAt = today; }
+  writeLingo(l);
+  return hit.map((w) => w.phrase);
 }

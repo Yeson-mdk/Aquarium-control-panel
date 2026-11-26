@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from '
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { DATA, nowIso } from '../store.mjs';
+import { DATA, nowIso, localDate } from '../store.mjs';
 
 const API = 'https://cnmeme.wiki/api/v1/public/memes';
 const TERMS = join(DATA, 'meme-terms.json'); // 号主教的黑话 { 名称: { meaning, by, at } }
@@ -189,7 +189,7 @@ export async function lookup(query) {
 }
 
 /**
- * 给 QQ 聊天用：号主教过你的黑话，你认得、能接梗（跟 lingo.lingoText 配对）。
+ * 给 QQ 聊天用：号主教过你的黑话，你认得、能接梗，自己说话也会用（跟 lingo.lingoText 配对）。
  * 只列小词库里确认过的词（不含在线/快照百科——那些靠 search_meme 按需查）。
  * 没有就返回空串，调用方直接忽略，不往 system 里塞废话。
  */
@@ -197,5 +197,17 @@ export function memeText(k = 8) {
   const terms = readTerms();
   const names = Object.keys(terms);
   if (!names.length) return '';
-  return `号主教过你的黑话（别人提到就接得住，合适时自然接梗、最多用一次，别硬塞）：${names.slice(0, k).map((n) => `「${n}」= ${clip(terms[n].meaning, 30)}`).join('；')}`;
+  return `号主教过你的黑话，已经是你自己会用的词了——别人提到接得住，自己吐槽、调侃的时候顺手带一个也自然（一场最多一个，别硬塞）：${names.slice(0, k).map((n) => `「${n}」= ${clip(terms[n].meaning, 30)}`).join('；')}`;
+}
+
+/** 用了才算会：她真把黑话用进回复了就记一笔（跟 lingo.markUsed 配对，喂回挑词/淘汰） */
+export function markUsedTerms(text, today = localDate()) {
+  const t = String(text || '');
+  if (!t) return [];
+  const terms = readTerms();
+  const hit = Object.keys(terms).filter((n) => n.length >= 2 && t.includes(n));
+  if (!hit.length) return [];
+  for (const n of hit) { terms[n].used = (terms[n].used || 0) + 1; terms[n].usedAt = today; }
+  writeJson(TERMS, terms);
+  return hit;
 }

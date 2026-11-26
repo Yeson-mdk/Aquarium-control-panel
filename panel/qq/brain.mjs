@@ -16,6 +16,7 @@ import * as llm from '../llm.mjs';
 import * as memory from '../memory.mjs';
 import * as mind from '../mind.mjs';
 import * as lingo from '../lingo.mjs'; // B站学会的说法：注入聊天，让她在 QQ 里也用得上
+import * as socialexp from '../socialexp.mjs'; // 社交经验：怎么接人待物的战术心得（进技巧，不进人设）
 import * as sky from '../sky.mjs';
 import * as owner from './owner.mjs';
 import { baguScore, baguRewrite } from './bagu.mjs'; // 鱼八股特征表：历史降权 + 出口重roll 共用
@@ -548,7 +549,7 @@ export async function reply(text, { model, fids = [], qq, peer = 'owner', name =
     ? '\n\n（这张梗图过了你自己的裁决才到你眼前的，不是背景音：先调 search_meme 把图上那个词过一遍梗百科——认识的也查，接得住就接一句或回一张表情包，直接接意思）' : '';
   // 她自己攒的说话素材：B站学的说法 + 号主教过的黑话。跟人设一起放在逐字不变的前缀里（缓存友好），
   // 词为空时两段都返回空串、前缀不变；有词也只是偶尔用一次，不逼她句句塞梗
-  const lingoBits = [lingo.lingoText(), meme.memeText()].filter(Boolean).map((s) => `\n\n${s}`).join('');
+  const lingoBits = [lingo.lingoText(), socialexp.expText(), meme.memeText()].filter(Boolean).map((s) => `\n\n${s}`).join('');
   const msgs = [
     { role: 'system', content: `${persona()}${mind.personaPatchText()}${lingoBits}\n\n${(() => {
       // 表情包频率从调参读（面板「手感调参 → 表情包」改，热生效）：钳 1~10，写坏文件也不至于让频率起飞
@@ -670,6 +671,8 @@ ${FAV_RULE}\n\n${FACT_RULE}\n\n${llm.UNTRUSTED}` },
     if (echo) { out.sticker = echo.name; out.text = echo.text; }
   }
   if (!free && !out.text && !out.sticker && !out.voice) out.text = '嗯？';
+  // 用了才算会：真把 B站学的说法 / 号主教的黑话 用进回复了就记一笔，喂回睡前的挑词和淘汰
+  try { if (out.text) { lingo.markUsed(out.text); meme.markUsedTerms(out.text); } } catch { /* 统计挂了不影响发消息 */ }
   return out;
 }
 

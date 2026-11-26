@@ -24,6 +24,7 @@ import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
 import * as memory from './memory.mjs';
 import * as lingo from './lingo.mjs';
+import * as socialexp from './socialexp.mjs';
 import * as sky from './sky.mjs';
 import { alert } from './alert.mjs';
 import { ROOT, DATA, localDate, logAction, readConfig, readActions, nowIso } from './store.mjs';
@@ -425,15 +426,26 @@ export async function maybeReflect({ reflectFn = reflect, alertFn = null } = {})
   await insight().catch(() => {}); // 阶段二：记忆流里长洞察（带出处、可推翻），写在「最近的我」之后
   await tidyMemory();
   await learnLingo(cfg);
+  await learnSocialExp(cfg);
   await maybeEvolvePersona().catch(() => {}); // 底盘缓慢演化：跟着睡前反思走，但按自己的周期来
 }
 
-/** 睡前翻翻今天见过的热评，学几个新说法 */
-async function learnLingo(cfg) {
-  try {
+/** 睡前翻翻今天见过的热评，学几个新说法，再挑几个明天想试着用起来的 */
+async function learnLingo(cfg) {  try {
     const r = await lingo.learn({ remember: cfg.memory ? remember : null });
-    if (r?.fresh.length) logAction({ kind: 'mind', source: 'auto', detail: `📚 在评论区学会了 ${r.fresh.map((w) => `「${w.phrase}」（${w.meaning}）`).join('、')}` });
+    const bits = [];
+    if (r?.fresh.length) bits.push(`📚 在评论区学会了 ${r.fresh.map((w) => `「${w.phrase}」（${w.meaning}）`).join('、')}`);
+    if (r?.daily.length) bits.push(`💡 明天想试着用起来 ${r.daily.map((w) => `「${w}」`).join('、')}`);
+    if (bits.length) logAction({ kind: 'mind', source: 'auto', detail: bits.join('；') });
   } catch { /* 明天再学 */ }
+}
+
+/** 睡前从今天的评论区来往里蒸馏社交心得（socialexp）：技巧进技巧库，不进人设 */
+async function learnSocialExp(cfg) {
+  try {
+    const r = await socialexp.learn({ remember: cfg.memory ? remember : null, acts: readActions() });
+    if (r?.fresh.length) logAction({ kind: 'mind', source: 'auto', detail: `🧠 悟了 ${r.fresh.length} 条社交心得：${r.fresh.map((x) => x.text.slice(0, 30)).join('、')}` });
+  } catch { /* 明天再悟 */ }
 }
 
 // 睡前反思是一天一次的正事，不受后台预算限制（essential）

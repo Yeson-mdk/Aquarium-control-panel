@@ -38,16 +38,46 @@ test('absorb：新的记下、又见到的加次数、30 天没见的忘掉', ()
   assert.equal(r.forgot, 1);
 });
 
-test('lingoText：没学会就是空的；有词时给聊天提示带意思', () => {
+test('lingoText：没学会就是空的；有词时给口癖提示带意思和例句', () => {
   assert.equal(lingo.lingoText(), '');
   const f = join(DATA, 'lingo.json');
   writeFileSync(f, JSON.stringify({ words: [
-    { phrase: '破防了', meaning: '心态崩了', at: '2026-11-01', last: '2026-11-01', n: 3 },
+    { phrase: '破防了', meaning: '心态崩了', example: '这波直接破防了', at: '2026-11-01', last: '2026-11-01', n: 3 },
   ] }));
   try {
     const t = lingo.lingoText();
     assert.match(t, /破防了/);
     assert.match(t, /心态崩了/);
-    assert.match(t, /合适就自然用一个/, '提示里带「别硬塞」的分寸');
+    assert.match(t, /这波直接破防了/, '例句带上，照着学用法');
+    assert.match(t, /口癖/, '主动口吻：是自己说话会带的，不是被动词典');
+  } finally { rmSync(f, { force: true }); }
+});
+
+test('pickDaily：睡前挑的优先、无效词滤掉；过期回落到按日期轮换，同一天选词稳定', () => {
+  const words = [1, 2, 3, 4, 5, 6].map((i) => ({ phrase: `词${i}`, meaning: 'x', at: '2026-11-01', last: '2026-11-01', n: 1 }));
+  const a = lingo.pickDaily({ words }, 3, '2026-11-20');
+  assert.equal(a.length, 3);
+  assert.deepEqual(a, lingo.pickDaily({ words }, 3, '2026-11-20'), '同一天轮换结果一致（缓存友好）');
+  const b = lingo.pickDaily({ words, daily: { date: '2026-11-20', phrases: ['词6', '词1', '不存在的词'] } }, 3, '2026-11-20');
+  assert.deepEqual(b.map((w) => w.phrase), ['词6', '词1'], '睡前挑的优先、词库里没有的滤掉');
+  const c = lingo.pickDaily({ words, daily: { date: '2026-11-18', phrases: ['词1'] } }, 3, '2026-11-20');
+  assert.equal(c.length, 3, '过了保鲜期的 daily 回落到轮换');
+});
+
+test('markUsed：真用上的说法记一笔，没用上的不动', () => {
+  const f = join(DATA, 'lingo.json');
+  writeFileSync(f, JSON.stringify({ words: [
+    { phrase: '破防了', meaning: '心态崩了', at: '2026-11-01', last: '2026-11-01', n: 1 },
+    { phrase: '绝绝子', meaning: '特别好', at: '2026-11-01', last: '2026-11-01', n: 1 },
+  ] }));
+  try {
+    const hit = lingo.markUsed('今天看这个视频直接破防了', '2026-11-26');
+    assert.deepEqual(hit, ['破防了']);
+    const words = lingo.readLingo().words;
+    assert.equal(words.find((w) => w.phrase === '破防了').used, 1);
+    assert.equal(words.find((w) => w.phrase === '破防了').usedAt, '2026-11-26');
+    assert.ok(!words.find((w) => w.phrase === '绝绝子').used, '没用过的不记');
+    assert.deepEqual(lingo.markUsed(''), []);
+    assert.deepEqual(lingo.markUsed('今天天气不错'), []);
   } finally { rmSync(f, { force: true }); }
 });

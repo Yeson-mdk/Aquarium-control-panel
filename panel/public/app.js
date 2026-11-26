@@ -1338,6 +1338,8 @@ async function pageAutopilot(main) {
       <div style="height:16px"></div>
       <div class="card" id="socialCard"></div>
       <div style="height:16px"></div>
+      <div class="card" id="expCard"><div class="card-h"><h2>🧠 社交经验</h2></div><div class="empty">加载中…</div></div>
+      <div style="height:16px"></div>
       <div class="card"><div class="card-h"><h2>为什么这样设计</h2></div>
         <div class="small" style="color:var(--text2)">
           <p style="margin-top:0">· <b>经验上限是死的</b>：登录 5 + 观看 5 + 分享 5 + 投币 ≤ 50。不投币时一天最多 15，刷再多也没用，反而像机器人。</p>
@@ -1466,6 +1468,7 @@ async function pageAutopilot(main) {
   }));
   renderVipCard($('#vipCard'));
   renderSocialCard($('#socialCard'), ap.social);
+  renderSocialexpCard($('#expCard'));
   // QQ 提醒
   const ntRefresh = () => api('/api/notify').then((n) => {
     $('#ntState').innerHTML = n.ready ? '<span class="chip green">机器人可用</span>' : `<span class="chip amber">${esc(n.why || '未配置')}</span>`;
@@ -1669,6 +1672,35 @@ function renderSocialCard(el, s) {
     ${s.people.length ? `<ul class="vip-list">${s.people.map((p) => `<li><a href="https://space.bilibili.com/${esc(p.uid)}" target="_blank" rel="noopener">${esc(p.name)}</a><span class="small muted">聊过 ${p.n} 次 · ${when(p.last)}</span></li>`).join('')}</ul>` : '<div class="empty">还没跟谁聊过</div>'}`;
   const btn = $('#socialCheck', el);
   if (btn) btn.onclick = (e) => busy(e.target, async () => { const r = await api('/api/social/check', {}); toast(r.note); renderSocialCard(el, r.social); });
+}
+
+// 🧠 社交经验库：她攒下的接人待物心得（手动加 / 每晚从评论区来往里悟 / 以后 WorldX 回写）。
+// 聊天和社交起草每次带几条（按天轮换），这里管账：加、删、看今天轮到哪几条。
+async function renderSocialexpCard(el) {
+  if (!el) return;
+  let r;
+  try { r = await api('/api/socialexp'); } catch (e) { el.innerHTML = `<div class="card-h"><h2>🧠 社交经验</h2></div><div class="err">${esc(e.message)}</div>`; return; }
+  if (!el.isConnected) return;
+  const SRC = { manual: '你加的', nightly: '她自己悟的', wx: 'WorldX' };
+  const rows = r.list.map((x) => `<li>
+      <div style="flex:1;min-width:0">${esc(x.text)}${x.text === r.today.find((t) => t === x.text) ? ' <span class="chip green" style="font-size:10px">今天在用</span>' : ''}</div>
+      <span class="small muted">${SRC[x.source] || x.source} · ×${x.n}</span>
+      <button class="btn sm ghost" data-exprm="${esc(x.id)}" title="删掉">×</button></li>`).join('');
+  el.innerHTML = `<div class="card-h"><h2>🧠 社交经验</h2><span class="small muted">${r.list.length}/16 条</span></div>
+    <div class="small muted" style="margin-bottom:8px">她接人待物的战术心得（是技巧不是性格，进聊天不进人设补丁）：聊天、回评论、搭话时每次带几条。晚上她会从当天的评论来往里自己悟；WorldX 以后也会写进来。</div>
+    <div class="row" style="margin-bottom:10px"><input id="expIn" placeholder="一条心得，比如：别人自嘲时别跟着踩，先捧一下再接话" style="flex:1;min-width:0"><button class="btn sm primary" id="expAdd">加一条</button></div>
+    ${r.list.length ? `<ul class="vip-list">${rows}</ul>` : '<div class="empty small">还空着。加一条，或者等她晚上自己悟。</div>'}
+    ${r.today.length ? `<div class="small muted" style="margin-top:10px">今天带进聊天里的：${r.today.map((t) => esc(t.slice(0, 24))).join('；')}</div>` : ''}`;
+  $('#expAdd', el).onclick = (e) => busy(e.target, async () => {
+    const t = $('#expIn', el).value.trim();
+    if (!t) return;
+    const res = await api('/api/socialexp/add', { text: t });
+    toast('加进经验库了');
+    renderSocialexpCard(el);
+    return res;
+  });
+  $('#expIn', el).onkeydown = (e) => { if (e.key === 'Enter') $('#expAdd', el).click(); };
+  $$('[data-exprm]', el).forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/socialexp/remove', { id: b.dataset.exprm }); toast('删了'); renderSocialexpCard(el); })));
 }
 
 async function renderVipCard(el, data) {

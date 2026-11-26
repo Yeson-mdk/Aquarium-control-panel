@@ -28,6 +28,7 @@ import * as purge from './purge.mjs';
 import * as botscore from './botscore.mjs';
 import * as stickers from './stickers.mjs';
 import * as social from './social.mjs';
+import * as socialexp from './socialexp.mjs';
 import * as sky from './sky.mjs';
 import * as health from './health.mjs';
 import * as qq from './qq/index.mjs';
@@ -633,6 +634,15 @@ const routes = {
     bust('unread', 'replyFeed');
     return { note: r.note, social: social.socialView() };
   },
+
+  // 社交经验库（socialexp）：她攒下的接人待物心得，聊天和社交起草每次都带几条
+  'GET /api/socialexp': async () => ({ list: socialexp.readExp().list, today: socialexp.pick(socialexp.readExp(), 3).map((r) => r.text) }),
+  'POST /api/socialexp/add': async (_q, b) => {
+    const added = socialexp.add(String(b.text || ''), 'manual');
+    if (!added) throw new Error('没加上：内容是空的、太长太短、或者已经有一条一样的了');
+    return { list: socialexp.readExp().list };
+  },
+  'POST /api/socialexp/remove': async (_q, b) => { if (!socialexp.remove(String(b.id || ''))) throw new Error('没这条'); return { list: socialexp.readExp().list }; },
 
   // QQ 提醒
   'POST /api/notify/test': async () => ({ ok: true, ...(await notify.sendOwner('🐟 测试一下：以后有要你审的东西，我会在这里叫你～')) }),
